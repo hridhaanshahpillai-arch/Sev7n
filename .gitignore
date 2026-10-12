@@ -1,0 +1,14 @@
+# made by build.bat / get-libs.ps1 / release.ps1, so they don't go in the repository
+build/
+lib/
+release/
+*.class
+
+# things made with Sev7n on your PC: your games and their exports
+projects/
+exports/
+
+# editors
+.idea/
+*.iml
+.vscode/
