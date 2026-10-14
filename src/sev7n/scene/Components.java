@@ -19,6 +19,7 @@ public final class Components {
         register("Light", Light::new);
         register("BoxCollider", BoxCollider::new);
         register("Rigidbody", Rigidbody::new);
+        register("ParticleEmitter", ParticleEmitter::new);
         register("Behaviour", Behaviour::new);
     }
 

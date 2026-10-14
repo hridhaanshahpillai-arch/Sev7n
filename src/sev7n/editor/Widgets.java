@@ -107,6 +107,16 @@ final class Widgets {
         return value;
     }
 
+    /** Like color(), with a see-through amount (alpha) too. */
+    static Color colorWithAlpha(String label, Color value) {
+        label(label);
+        float[] rgba = {value.getRed() / 255f, value.getGreen() / 255f, value.getBlue() / 255f, value.getAlpha() / 255f};
+        if (ImGui.colorEdit4("##" + label, rgba, ImGuiColorEditFlags.DisplayHex | ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreviewHalf)) {
+            return new Color(rgba[0], rgba[1], rgba[2], rgba[3]);
+        }
+        return value;
+    }
+
     static String choice(String label, String current, List<String> options) {
         label(label);
         String result = current;

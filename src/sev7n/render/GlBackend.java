@@ -19,7 +19,7 @@ public final class GlBackend implements GraphicsBackend {
     private final String description = "OpenGL " + glGetString(GL_VERSION) + " on " + glGetString(GL_RENDERER);
 
     /** Which kind of drawing the GL state is set up for, so it only changes when needed. */
-    private enum Mode { NONE, LIT, SPRITE, LINES }
+    private enum Mode { NONE, LIT, SPRITE, PARTICLE, LINES }
 
     private Mode mode = Mode.NONE;
     private Frame frame;
@@ -68,6 +68,18 @@ public final class GlBackend implements GraphicsBackend {
     }
 
     @Override
+    public void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow) {
+        use(Mode.PARTICLE);
+        glBlendFunc(GL_SRC_ALPHA, glow ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA); // glowing particles add their light
+        if (texture != null) ((Texture) texture).bind(0);
+        sprite.set("uUseTexture", texture != null ? 1 : 0);
+        sprite.setRgba("uTint", tint);
+        sprite.set("uModel", model);
+        sprite.set("uUVRect", 0, 0, 1, 1);
+        ((Mesh) mesh).draw();
+    }
+
+    @Override
     public void drawLines(GpuMesh mesh, Matrix4f model, Color color, float alpha, float fadeStart, float fadeEnd, boolean onTop) {
         use(Mode.LINES);
         unlit.set("uModel", model);
@@ -95,24 +107,24 @@ public final class GlBackend implements GraphicsBackend {
     private void use(Mode next) {
         if (next == mode) return;
         // leave the old mode
-        if (mode == Mode.SPRITE || mode == Mode.LINES) glDisable(GL_BLEND);
-        if (mode == Mode.LINES) glDepthMask(true);
+        if (mode != Mode.LIT) glDisable(GL_BLEND);
+        if (mode == Mode.LINES || mode == Mode.PARTICLE) glDepthMask(true);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         mode = next;
         if (next == Mode.NONE) return;
 
         RenderSettings settings = frame.settings();
         RenderView view = frame.view();
-        if (next != Mode.LINES && settings.shading == RenderSettings.Shading.WIREFRAME) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        if ((next == Mode.LIT || next == Mode.SPRITE) && settings.shading == RenderSettings.Shading.WIREFRAME) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         if (next != Mode.LIT) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         }
-        if (next == Mode.LINES) glDepthMask(false);
+        if (next == Mode.LINES || next == Mode.PARTICLE) glDepthMask(false); // see-through: never hide what's drawn later
 
         Shader shader = switch (next) {
             case LIT -> lit;
-            case SPRITE -> sprite;
+            case SPRITE, PARTICLE -> sprite;
             default -> unlit;
         };
         shader.use();

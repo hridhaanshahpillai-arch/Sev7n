@@ -54,6 +54,7 @@ final class GuidePanel {
             new Guide("Importing Assets", Path.of("docs", "ASSETS.md")),
             new Guide("2D Games", Path.of("docs", "2D.md")),
             new Guide("Physics", Path.of("docs", "PHYSICS.md")),
+            new Guide("Particle Effects", Path.of("docs", "EFFECTS.md")),
             new Guide("Exporting a Game", Path.of("docs", "EXPORT.md")),
             new Guide("Settings", Path.of("docs", "SETTINGS.md")));
 

@@ -15,6 +15,7 @@ import sev7n.scene.Entity;
 import sev7n.scene.Light;
 import sev7n.render.SceneRenderer;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Rigidbody;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
@@ -131,6 +132,7 @@ final class InspectorPanel {
             case Light l -> drawLight(l);
             case BoxCollider b -> drawBoxCollider(entity, b);
             case Rigidbody r -> drawRigidbody(entity, r);
+            case ParticleEmitter p -> drawParticleEmitter(p);
             case Behaviour b -> drawBehaviour(b);
             default -> false;
         };
@@ -379,6 +381,95 @@ final class InspectorPanel {
         r.bounciness = bounciness;
         r.drag = drag;
         if (!entity.has(BoxCollider.class)) Widgets.hint("Add a Box Collider so it can land on and bump into things.");
+        return changed;
+    }
+
+    // ---------------------------------------------------------------- particle effects
+
+    private boolean drawParticleEmitter(ParticleEmitter p) {
+        boolean changed = false;
+        Widgets.label("Preset");
+        if (ImGui.beginCombo("##preset", "Start from...")) {
+            for (String preset : ParticleEmitter.PRESETS) {
+                if (ImGui.selectable(preset)) {
+                    p.applyPreset(preset);
+                    p.reset();
+                    changed = true;
+                }
+            }
+            ImGui.endCombo();
+        }
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Replace every setting below with a ready-made effect, then tweak it");
+        ImGui.setCursorPosX(Widgets.labelWidth());
+        if (ImGui.button("Restart", -1, 0)) p.reset();
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Clear the particles and play it again from the start");
+        Widgets.hint(p.particles().size() + " particles now. Effects play in the Scene view while you edit them.");
+
+        ImGui.separator();
+        boolean playOnStart = Widgets.checkbox("Play on start", p.playOnStart, "Starts by itself when the game starts (scripts can use entity.playEffect())");
+        boolean loop = Widgets.checkbox("Loop", p.loop, "Keep going forever; otherwise emit for Duration seconds, then stop");
+        double duration = p.duration;
+        if (!loop) duration = Widgets.number("Duration", p.duration, 0.01f, 0, 60);
+        double rate = Widgets.number("Per second", p.rate, 0.5f, 0, 2000);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("How many particles come out every second");
+        int burst = Widgets.integer("Burst", p.burst, 0, 2000);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Particles that come out all at once when it starts (explosions)");
+        double radius = Widgets.number("Start radius", p.radius, 0.01f, 0, 100);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Particles start anywhere inside a ball this big (0 = all from one point)");
+        int maxParticles = Widgets.integer("Max particles", p.maxParticles, 1, 10000);
+
+        ImGui.separator();
+        double lifetime = Widgets.number("Lifetime", p.lifetime, 0.01f, 0.05f, 60);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Seconds each particle lives");
+        double lifetimeRandom = Widgets.number("Lifetime +/-", p.lifetimeRandom, 0.01f, 0, 1);
+        double speed = Widgets.number("Speed", p.speed, 0.02f, 0, 200);
+        double speedRandom = Widgets.number("Speed +/-", p.speedRandom, 0.01f, 0, 1);
+        changed |= Widgets.vec3("Direction", p.direction, 0.02f);
+        double spread = Widgets.number("Spread", p.spread, 0.5f, 0, 180);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Degrees away from Direction: 0 = a thin stream, 180 = every way");
+        double gravity = Widgets.number("Gravity", p.gravity, 0.01f, -10, 10);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("1 = falls normally, 0 = floats, below 0 = rises (fire, smoke)");
+        double drag = Widgets.number("Drag", p.drag, 0.01f, 0, 50);
+
+        ImGui.separator();
+        double startSize = Widgets.number("Start size", p.startSize, 0.005f, 0, 50);
+        double endSize = Widgets.number("End size", p.endSize, 0.005f, 0, 50);
+        Color startColor = Widgets.colorWithAlpha("Start color", p.startColor);
+        Color endColor = Widgets.colorWithAlpha("End color", p.endColor);
+        boolean randomColors = Widgets.checkbox("Random colors", p.randomColors, "Every particle gets its own bright color (confetti)");
+        boolean glow = Widgets.checkbox("Glow", p.glow, "Particles add light where they overlap (fire, sparks, magic) instead of covering each other (smoke)");
+        String texture = textureField("Picture", p.texture);
+        boolean destroyWhenDone = Widgets.checkbox("Auto-remove", p.destroyWhenDone,
+                "Delete this object once the effect has stopped and its last particle is gone (one-off effects)");
+
+        changed |= playOnStart != p.playOnStart || loop != p.loop || duration != p.duration || rate != p.rate
+                || burst != p.burst || radius != p.radius || maxParticles != p.maxParticles
+                || lifetime != p.lifetime || lifetimeRandom != p.lifetimeRandom || speed != p.speed || speedRandom != p.speedRandom
+                || spread != p.spread || gravity != p.gravity || drag != p.drag || startSize != p.startSize || endSize != p.endSize
+                || !startColor.equals(p.startColor) || !endColor.equals(p.endColor) || randomColors != p.randomColors
+                || glow != p.glow || !texture.equals(p.texture) || destroyWhenDone != p.destroyWhenDone;
+        p.playOnStart = playOnStart;
+        p.loop = loop;
+        p.duration = duration;
+        p.rate = rate;
+        p.burst = burst;
+        p.radius = radius;
+        p.maxParticles = maxParticles;
+        p.lifetime = lifetime;
+        p.lifetimeRandom = lifetimeRandom;
+        p.speed = speed;
+        p.speedRandom = speedRandom;
+        p.spread = spread;
+        p.gravity = gravity;
+        p.drag = drag;
+        p.startSize = startSize;
+        p.endSize = endSize;
+        p.startColor = startColor;
+        p.endColor = endColor;
+        p.randomColors = randomColors;
+        p.glow = glow;
+        p.texture = texture;
+        p.destroyWhenDone = destroyWhenDone;
         return changed;
     }
 

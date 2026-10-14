@@ -39,6 +39,12 @@ public interface GraphicsBackend extends AutoCloseable {
     void drawSprite(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, float u, float v, float width, float height);
 
     /**
+     * A particle: a see-through card (the whole texture times the tint, or a plain card if null)
+     * that is depth tested but never hides what's drawn after it. Glowing ones add their light.
+     */
+    void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow);
+
+    /**
      * Flat-colored lines (grid, outlines) that fade out between fadeStart and fadeEnd from the eye.
      * They don't hide what's drawn after them; onTop draws them over everything.
      */

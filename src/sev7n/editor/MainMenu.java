@@ -64,6 +64,8 @@ final class MainMenu {
                 if (kind.equals("Sprite") || kind.equals("Camera")) ImGui.separator();
                 if (ImGui.menuItem(kind)) ctx.create(kind);
             }
+            ImGui.separator();
+            HierarchyPanel.effectMenu(ctx);
             ImGui.endMenu();
         }
         if (ImGui.beginMenu("Window")) {
@@ -81,6 +83,7 @@ final class MainMenu {
             if (ImGui.menuItem("Importing Assets")) actions.openGuide("ASSETS.md");
             if (ImGui.menuItem("2D Games")) actions.openGuide("2D.md");
             if (ImGui.menuItem("Physics")) actions.openGuide("PHYSICS.md");
+            if (ImGui.menuItem("Particle Effects")) actions.openGuide("EFFECTS.md");
             if (ImGui.menuItem("Exporting a Game")) actions.openGuide("EXPORT.md");
             if (ImGui.menuItem("Settings")) actions.openGuide("SETTINGS.md");
             ImGui.separator();

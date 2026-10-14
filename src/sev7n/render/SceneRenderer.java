@@ -7,6 +7,7 @@ import sev7n.scene.BoxCollider;
 import sev7n.scene.Entity;
 import sev7n.scene.Light;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
 import sev7n.scene.SpriteFrame;
 import sev7n.scene.SpriteRenderer;
@@ -14,6 +15,7 @@ import sev7n.scene.Tilemap;
 import sev7n.ui.Theme;
 
 import java.awt.Color;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
@@ -39,6 +41,7 @@ public final class SceneRenderer implements AutoCloseable {
     private final GpuMesh quad;
     private final GpuMesh grid;
     private final GpuMesh wireCube;
+    private final GpuTexture softDot; // what particles look like without a picture
     private final AssetCache assets;
     private final Matrix4f model = new Matrix4f();
     private RenderSettings settings = new RenderSettings();
@@ -62,6 +65,7 @@ public final class SceneRenderer implements AutoCloseable {
         quad = gpu.mesh(MeshData.quad());
         grid = gpu.mesh(MeshData.grid(GRID_HALF_SIZE));
         wireCube = gpu.mesh(MeshData.wireCube());
+        softDot = gpu.texture(softDotPicture(64), false);
         builtIn.put("cube", gpu.mesh(MeshData.cube()));
         builtIn.put("sphere", gpu.mesh(MeshData.sphere(32, 16)));
         builtIn.put("plane", gpu.mesh(MeshData.plane()));
@@ -126,6 +130,8 @@ public final class SceneRenderer implements AutoCloseable {
 
     private void drawMeshes(Scene scene) {
         for (Entity entity : scene.entities()) {
+            ParticleEmitter emitter = entity.get(ParticleEmitter.class);
+            if (entity.active && emitter != null && emitter.look == ParticleEmitter.Look.MODEL) drawModelParticles(emitter); // solid, so drawn with the meshes
             MeshRenderer renderer = entity.get(MeshRenderer.class);
             if (!entity.active || renderer == null) continue;
             entity.transform.matrix(model);
@@ -144,8 +150,8 @@ public final class SceneRenderer implements AutoCloseable {
 
     // ---------------------------------------------------------------- sprites & tilemaps
 
-    /** Something see-through to draw, with its distance from the eye and its draw order. */
-    private record Flat(Entity entity, float depth, int order) { }
+    /** Something see-through to draw (a sprite, tilemap or particle effect), with its distance from the eye and its draw order. */
+    private record Flat(Entity entity, float depth, int order, boolean particles) { }
 
     /**
      * Sprites and tilemaps are see-through, so they're drawn after solid objects,
@@ -158,15 +164,18 @@ public final class SceneRenderer implements AutoCloseable {
             if (!entity.active) continue;
             SpriteRenderer spriteRenderer = entity.get(SpriteRenderer.class);
             Tilemap tilemap = entity.get(Tilemap.class);
-            if (spriteRenderer == null && (tilemap == null || tilemap.isEmpty())) continue;
+            ParticleEmitter emitter = entity.get(ParticleEmitter.class);
             Vec3 p = entity.transform.position;
-            flats.add(new Flat(entity, view.depth(p.x, p.y, p.z), spriteRenderer != null ? spriteRenderer.order : -1000));
+            float depth = view.depth(p.x, p.y, p.z);
+            if (spriteRenderer != null) flats.add(new Flat(entity, depth, spriteRenderer.order, false));
+            else if (tilemap != null && !tilemap.isEmpty()) flats.add(new Flat(entity, depth, -1000, false));
+            if (emitter != null && !emitter.particles().isEmpty() && emitter.look == ParticleEmitter.Look.DOT) flats.add(new Flat(entity, depth, Integer.MAX_VALUE, true)); // in front of its own sprite
         }
         flats.sort(Comparator.comparingDouble((Flat f) -> -f.depth()).thenComparingInt(Flat::order));
 
         for (Flat flat : flats) {
-            SpriteRenderer spriteRenderer = flat.entity().get(SpriteRenderer.class);
-            if (spriteRenderer != null) drawSprite(flat.entity(), spriteRenderer, view);
+            if (flat.particles()) drawParticles(flat.entity().get(ParticleEmitter.class), view);
+            else if (flat.entity().has(SpriteRenderer.class)) drawSprite(flat.entity(), flat.entity().get(SpriteRenderer.class), view);
             else drawTilemap(flat.entity(), flat.entity().get(Tilemap.class));
         }
         forgetUnusedTilemaps();
@@ -256,6 +265,62 @@ public final class SceneRenderer implements AutoCloseable {
         });
     }
 
+    // ---------------------------------------------------------------- particles
+
+    /** One particle and its distance from the eye, for drawing far ones first. */
+    private record Dot(ParticleEmitter.Particle particle, float depth) { }
+
+    /**
+     * Every particle is a little card facing the camera. Soft ones are drawn farthest first so
+     * they cover each other properly; glowing ones just add up, so their order doesn't matter.
+     */
+    private void drawParticles(ParticleEmitter emitter, RenderView view) {
+        GpuTexture picture = emitter.texture.isEmpty() ? softDot : assets.texture(emitter.texture, false);
+        if (picture == null) picture = softDot;
+        List<Dot> dots = new ArrayList<>(emitter.particles().size());
+        for (ParticleEmitter.Particle p : emitter.particles()) dots.add(new Dot(p, emitter.glow ? 0 : view.depth(p.x, p.y, p.z)));
+        if (!emitter.glow) dots.sort(Comparator.comparingDouble((Dot d) -> -d.depth()));
+
+        Matrix4f facing = view.view().invert(new Matrix4f()).setTranslation(0, 0, 0);
+        for (Dot dot : dots) {
+            ParticleEmitter.Particle p = dot.particle();
+            float size = (float) Math.max(0, emitter.size(p));
+            if (size == 0) continue;
+            model.identity().translate((float) p.x, (float) p.y, (float) p.z).mul(facing)
+                    .rotateZ((float) Math.toRadians(p.angle)).scale(size, size, size);
+            gpu.drawParticle(quad, picture, model, emitter.color(p), emitter.glow);
+        }
+    }
+
+    /** Model particles are solid, lit shapes spinning around their own axis; they shrink instead of fading. */
+    private void drawModelParticles(ParticleEmitter emitter) {
+        Model shape = model(emitter.model);
+        for (ParticleEmitter.Particle p : emitter.particles()) {
+            float size = (float) Math.max(0, emitter.size(p));
+            if (size == 0) continue;
+            model.identity().translate((float) p.x, (float) p.y, (float) p.z)
+                    .rotate((float) Math.toRadians(p.angle), (float) p.axisX, (float) p.axisY, (float) p.axisZ)
+                    .scale(size, size, size);
+            Color color = emitter.color(p);
+            for (Model.Part part : shape.parts) gpu.drawLit(part.mesh(), part.texture(), model, multiply(color, part.color()));
+        }
+    }
+
+    /** A white dot that fades out softly toward its edge. */
+    private static BufferedImage softDotPicture(int size) {
+        BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+        float center = (size - 1) / 2f;
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                double distance = Math.hypot(x - center, y - center) / (size / 2.0);
+                double alpha = Math.max(0, 1 - distance);
+                alpha = alpha * alpha * (3 - 2 * alpha); // smooth falloff
+                image.setRGB(x, y, ((int) Math.round(alpha * 255) << 24) | 0xFFFFFF);
+            }
+        }
+        return image;
+    }
+
     /** Places the 1x1 quad: entity transform (or facing the camera), then the frame's spot and size. */
     private Matrix4f spriteMatrix(Entity entity, SpriteRenderer renderer, SpriteLook look, RenderView view) {
         Matrix4f m = new Matrix4f();
@@ -294,6 +359,12 @@ public final class SceneRenderer implements AutoCloseable {
         if (tilemap != null && !tilemap.isEmpty()) {
             GpuMesh mesh = tilemapMesh(tilemap, assets.texture(tilemap.tileset, tilemap.pixelArt));
             return new Bounds(matrix, new Vector3f(mesh.boundsMin()), new Vector3f(mesh.boundsMax()));
+        }
+        ParticleEmitter emitter = entity.get(ParticleEmitter.class);
+        if (emitter != null) {
+            // where particles start, so the effect can be clicked and outlined
+            float r = (float) Math.max(0.25, Math.min(emitter.radius, 3));
+            return new Bounds(matrix, new Vector3f(-r), new Vector3f(r));
         }
         return null;
     }
@@ -339,6 +410,7 @@ public final class SceneRenderer implements AutoCloseable {
         quad.close();
         grid.close();
         wireCube.close();
+        softDot.close();
         tileMeshes.values().forEach(t -> t.mesh().close());
         assets.close();
         gpu.close();

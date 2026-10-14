@@ -40,6 +40,8 @@ behaviour PlayerMove {
   grids or automatic detection; move, resize, reorder, trim, set pivots, preview the animation
 - **Settings** (new, click the 7): **OpenGL or Vulkan**, Lit / Flat / Toon / Wireframe shading, render scale,
   anti-aliasing, pixel textures, fog and render distance, brightness, frame rate limits and VSync
+- **Particle effects** (new): right-click → New Effect for fire, smoke, sparks, magic, explosions, rain, snow or
+  confetti; tweak them live in the Scene view; `spawnEffect("Explosion", position)` from scripts
 - **Vulkan** (new): games can draw with Vulkan instead of OpenGL (same look), falling back to OpenGL on PCs
   that can't run it. **File → Play in Window** (Ctrl+F5) shows your game exactly as players will see it
 - **Live Mode** (new, the LIVE button next to Play): edit your game while it plays. Changes are kept when you stop,
@@ -57,7 +59,7 @@ behaviour PlayerMove {
 - **Play mode**: runs on a copy of the scene, so Stop puts everything back (like Unity), unless Live Mode is on
 - **Built-in code editor** with Dracula Soft colors, auto-indent, undo, Ctrl+/ comments
 - **Components**: Transform, Mesh Renderer, Sprite Renderer, Sprite Animator, Tilemap, Camera,
-  Directional Light, Box Collider, Rigidbody, Behaviour
+  Directional Light, Box Collider, Rigidbody, Particle Effect, Behaviour
 - **Scenes saved as readable JSON**, scripts as plain `.7n` files, graphs as `.8s` files
 
 ## Running it from the source code
@@ -112,6 +114,7 @@ In the editor, press **F1** (or **Help → Guides**) to read these guides with s
 - [docs/ASSETS.md](docs/ASSETS.md): importing pictures, models and packs
 - [docs/2D.md](docs/2D.md): 2D cameras, sprites, sprite animation and tilemaps
 - [docs/PHYSICS.md](docs/PHYSICS.md): Rigidbodies, colliders and triggers
+- [docs/EFFECTS.md](docs/EFFECTS.md): particle effects
 - [docs/EXPORT.md](docs/EXPORT.md): turning your project into a game others can play
 - [docs/SETTINGS.md](docs/SETTINGS.md): graphics (OpenGL / Vulkan), frame rate, editor settings and Live Mode
 

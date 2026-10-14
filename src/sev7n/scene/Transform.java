@@ -72,8 +72,9 @@ public final class Transform {
         return direction(0, 1, 0);
     }
 
-    private Vec3 direction(float x, float y, float z) {
-        Vector3f d = rotationMatrix(new Matrix4f()).transformDirection(new Vector3f(x, y, z));
+    /** A direction in the entity's own space (e.g. its local up), turned by the entity's rotation. */
+    public Vec3 direction(double x, double y, double z) {
+        Vector3f d = rotationMatrix(new Matrix4f()).transformDirection(new Vector3f((float) x, (float) y, (float) z));
         return new Vec3(d.x, d.y, d.z);
     }
 

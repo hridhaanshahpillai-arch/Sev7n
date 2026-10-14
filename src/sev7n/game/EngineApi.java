@@ -4,6 +4,7 @@ import sev7n.lang.Interpreter;
 import sev7n.math.Vec3;
 import sev7n.scene.Entity;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,7 +12,7 @@ import java.util.List;
 /**
  * Global functions scripts get from the engine (on top of the core library):
  *   input:   key, keyPressed, keyReleased, mouseX, mouseY, mouseDown, mouseClicked
- *   scene:   find(name), findAll(tag), spawn(mesh or model path, [position])
+ *   scene:   find(name), findAll(tag), spawn(mesh or model path, [position]), spawnEffect(preset, [position])
  *   time:    time()
  *   physics: gravity(), setGravity(v), solidAt(point)
  */
@@ -64,6 +65,13 @@ final class EngineApi {
             }
             Vec3 position = args.has(1) ? args.vec3(1) : new Vec3();
             return game.spawn(mesh, position);
+        });
+        seven.defineNative("spawnEffect", 1, 2, args -> {
+            String preset = args.string(0);
+            if (!ParticleEmitter.PRESETS.contains(preset)) {
+                throw args.error("unknown effect '" + preset + "'. Use one of " + ParticleEmitter.PRESETS);
+            }
+            return game.spawnEffect(preset, args.has(1) ? args.vec3(1) : new Vec3());
         });
     }
 }

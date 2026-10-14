@@ -5,6 +5,7 @@ import sev7n.eights.GraphFile;
 import sev7n.game.Game;
 import sev7n.game.Input;
 import sev7n.game.Log;
+import sev7n.game.Solids;
 import sev7n.math.Vec3;
 import sev7n.project.AssetImporter;
 import sev7n.project.AssetKind;
@@ -18,6 +19,7 @@ import sev7n.scene.Camera;
 import sev7n.scene.Entity;
 import sev7n.scene.Light;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
 import sev7n.scene.SceneSerializer;
 import sev7n.scene.SpriteAnimator;
@@ -308,6 +310,17 @@ final class EditorContext {
         return entity;
     }
 
+    /** A particle effect from a preset ("Fire", "Explosion"...), a little above the ground. */
+    Entity createEffect(String preset) {
+        Scene scene = scene();
+        Entity entity = scene.create(scene.uniqueName(preset));
+        entity.transform.position.set(0, preset.equals("Rain") || preset.equals("Snow") ? 8 : 1, 0);
+        entity.add(ParticleEmitter.preset(preset));
+        select(entity);
+        markDirty();
+        return entity;
+    }
+
     void duplicate(Entity entity) {
         if (entity == null) return;
         select(scene().duplicate(entity));
@@ -468,7 +481,10 @@ final class EditorContext {
     /** Runs queued main-thread work and advances the running game, if any. Called once per frame. */
     void update(double dt) {
         for (Runnable task; (task = mainThread.poll()) != null; ) task.run();
-        if (game == null) previewAnimation(dt);
+        if (game == null) {
+            previewAnimation(dt);
+            previewEffects(dt);
+        }
         if (game == null) return;
         if (live()) {
             // everything that changed since the last update was done in the editor
@@ -524,6 +540,22 @@ final class EditorContext {
             // no scripts folder yet
         }
         return times;
+    }
+
+    /** Particle effects always play in the editor, so you see what you're making; one-off effects repeat. */
+    private void previewEffects(double dt) {
+        Solids solids = null; // gathered once, only if some effect bounces off things
+        for (Entity entity : editScene.entities()) {
+            ParticleEmitter emitter = entity.get(ParticleEmitter.class);
+            if (emitter == null) continue;
+            if (!entity.active) {
+                emitter.reset();
+                continue;
+            }
+            if (!emitter.emitting() && emitter.particles().isEmpty()) emitter.play();
+            if (emitter.collide && solids == null) solids = Solids.of(editScene);
+            emitter.update(dt, entity.transform, solids);
+        }
     }
 
     private void previewAnimation(double dt) {

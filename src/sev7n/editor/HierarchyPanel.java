@@ -13,6 +13,7 @@ import sev7n.scene.Camera;
 import sev7n.scene.Entity;
 import sev7n.scene.Light;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
 import sev7n.scene.SpriteRenderer;
 import sev7n.ui.Theme;
@@ -44,6 +45,7 @@ final class HierarchyPanel {
         if (entity.has(Light.class)) return new Color(0xE7EE98);
         if (entity.has(MeshRenderer.class)) return Theme.ACCENT;
         if (entity.has(SpriteRenderer.class)) return new Color(0xF286C4);
+        if (entity.has(ParticleEmitter.class)) return Theme.SUCCESS;
         return Theme.TEXT_FAINT;
     }
 
@@ -105,6 +107,12 @@ final class HierarchyPanel {
                 entity.active = !entity.active;
                 ctx.markDirty();
             }
+            if (ImGui.beginMenu("New Effect")) { // made where this entity is
+                for (String preset : ParticleEmitter.PRESETS) {
+                    if (ImGui.menuItem(preset)) ctx.createEffect(preset).transform.position.set(entity.transform.position);
+                }
+                ImGui.endMenu();
+            }
             ImGui.separator();
             if (ImGui.menuItem("Delete", "Del")) ctx.delete(entity);
             ImGui.endPopup();
@@ -160,5 +168,16 @@ final class HierarchyPanel {
             if (kind.equals("Sprite") || kind.equals("Camera")) ImGui.separator();
             if (ImGui.menuItem(kind)) ctx.create(kind);
         }
+        ImGui.separator();
+        effectMenu(ctx);
+    }
+
+    /** "New Effect" with a particle effect preset in each item. Also in the menu bar's Create menu. */
+    static void effectMenu(EditorContext ctx) {
+        if (!ImGui.beginMenu("New Effect")) return;
+        for (String preset : ParticleEmitter.PRESETS) {
+            if (ImGui.menuItem(preset)) ctx.createEffect(preset);
+        }
+        ImGui.endMenu();
     }
 }

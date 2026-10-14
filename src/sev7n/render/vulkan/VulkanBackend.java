@@ -60,6 +60,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * Pipelines (Vulkan's baked-in drawing states):
  *   lit      solid surfaces: depth tested and written         (+ a wireframe version)
  *   sprite   see-through pictures: blended                     (+ a wireframe version)
+ *   particle see-through dots: blended, don't write depth      (+ a glowing, adding version)
  *   lines    grid and outlines: blended, don't write depth     (+ an on-top version)
  */
 public final class VulkanBackend implements GraphicsBackend {
@@ -89,7 +90,7 @@ public final class VulkanBackend implements GraphicsBackend {
 
     // pipelines, built for the render target's render pass (rebuilt when anti-aliasing changes); 0 = none yet
     private int pipelineVersion;
-    private long lit, litWire, sprite, spriteWire, lines, linesOnTop;
+    private long lit, litWire, sprite, spriteWire, particle, particleGlow, lines, linesOnTop;
 
     // the frame being recorded (set by VulkanPresenter)
     private VkCommandBuffer commands;
@@ -213,12 +214,20 @@ public final class VulkanBackend implements GraphicsBackend {
         litWire = pipeline(shaders[0], shaders[1], true, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, line, false, true, true, samples);
         sprite = pipeline(shaders[0], shaders[2], true, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_POLYGON_MODE_FILL, true, true, true, samples);
         spriteWire = pipeline(shaders[0], shaders[2], true, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, line, true, true, true, samples);
+        particle = pipeline(shaders[0], shaders[2], true, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_POLYGON_MODE_FILL, true, true, false, samples);
+        particleGlow = pipeline(shaders[0], shaders[2], true, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_POLYGON_MODE_FILL, true, true, false, samples, true);
         lines = pipeline(shaders[3], shaders[4], false, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, VK_POLYGON_MODE_FILL, true, true, false, samples);
         linesOnTop = pipeline(shaders[3], shaders[4], false, VK_PRIMITIVE_TOPOLOGY_LINE_LIST, VK_POLYGON_MODE_FILL, true, false, false, samples);
     }
 
     private long pipeline(long vertexShader, long fragmentShader, boolean fullVertex, int topology, int polygonMode,
                           boolean blend, boolean depthTest, boolean depthWrite, int samples) {
+        return pipeline(vertexShader, fragmentShader, fullVertex, topology, polygonMode, blend, depthTest, depthWrite, samples, false);
+    }
+
+    /** @param additive blending adds the color (glow) instead of covering what's behind */
+    private long pipeline(long vertexShader, long fragmentShader, boolean fullVertex, int topology, int polygonMode,
+                          boolean blend, boolean depthTest, boolean depthWrite, int samples, boolean additive) {
         try (MemoryStack stack = stackPush()) {
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
             stages.get(0).sType$Default().stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertexShader).pName(stack.UTF8("main"));
@@ -250,7 +259,8 @@ public final class VulkanBackend implements GraphicsBackend {
             VkPipelineColorBlendAttachmentState.Buffer blending = VkPipelineColorBlendAttachmentState.calloc(1, stack)
                     .colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
                     .blendEnable(blend)
-                    .srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA).dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+                    .srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA)
+                    .dstColorBlendFactor(additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
                     .colorBlendOp(VK_BLEND_OP_ADD)
                     .srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE).dstAlphaBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
                     .alphaBlendOp(VK_BLEND_OP_ADD);
@@ -272,7 +282,7 @@ public final class VulkanBackend implements GraphicsBackend {
 
     private void destroyPipelines() {
         if (pipelineVersion == 0) return;
-        long[] old = {lit, litWire, sprite, spriteWire, lines, linesOnTop};
+        long[] old = {lit, litWire, sprite, spriteWire, particle, particleGlow, lines, linesOnTop};
         vk.later(() -> {
             for (long pipeline : old) vkDestroyPipeline(vk.device, pipeline, null);
         });
@@ -566,6 +576,12 @@ public final class VulkanBackend implements GraphicsBackend {
         draw(wireframe ? spriteWire : sprite, (VkMesh) mesh, (VkTexture) texture, model,
                 tint.getRed() / 255f, tint.getGreen() / 255f, tint.getBlue() / 255f, tint.getAlpha() / 255f,
                 u, v, width, height, 0, 0);
+    }
+
+    @Override
+    public void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow) {
+        draw(glow ? particleGlow : particle, (VkMesh) mesh, (VkTexture) texture, model,
+                tint.getRed() / 255f, tint.getGreen() / 255f, tint.getBlue() / 255f, tint.getAlpha() / 255f, 0, 0, 1, 1, 0, 0);
     }
 
     @Override

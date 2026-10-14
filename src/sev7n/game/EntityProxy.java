@@ -10,6 +10,7 @@ import sev7n.scene.Camera;
 import sev7n.scene.Component;
 import sev7n.scene.Entity;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Rigidbody;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
@@ -27,6 +28,7 @@ import java.util.List;
  *   entity.addBehaviour("Name")  entity.behaviour("Name")
  *   physics:   entity.velocity  entity.grounded  entity.push(v)
  *   sprites:   entity.frame  entity.flipX  entity.flipY  entity.play("run")  entity.animation  entity.animationDone
+ *   effects:   entity.emit(n)  entity.playEffect()  entity.stopEffect()  entity.effectDone
  *   others:    entity.camera  entity.tile(x, y)  entity.setTile(x, y, tile)
  *
  * There is one proxy per entity, so 'other == player' works.
@@ -84,6 +86,20 @@ final class EntityProxy implements SevenObject {
             });
             case "animation" -> requireAnimator(line).current();
             case "animationDone" -> requireAnimator(line).finished();
+            // particle effects
+            case "emit" -> new NativeFunction(name, 1, 1, args -> {
+                requireEmitter(args.line()).emit(args.integer(0), entity.transform);
+                return null;
+            });
+            case "playEffect" -> new NativeFunction(name, 0, 0, args -> {
+                requireEmitter(args.line()).play();
+                return null;
+            });
+            case "stopEffect" -> new NativeFunction(name, 0, 0, args -> {
+                requireEmitter(args.line()).stop();
+                return null;
+            });
+            case "effectDone" -> requireEmitter(line).done();
             // camera & tilemap
             case "camera" -> entity.get(Camera.class) == null ? null : new CameraProxy(entity.get(Camera.class));
             case "tile" -> new NativeFunction(name, 2, 2, args -> {
@@ -168,6 +184,10 @@ final class EntityProxy implements SevenObject {
 
     private SpriteAnimator requireAnimator(int line) {
         return require(SpriteAnimator.class, "a Sprite Animator", line);
+    }
+
+    private ParticleEmitter requireEmitter(int line) {
+        return require(ParticleEmitter.class, "a Particle Effect", line);
     }
 
     private Tilemap requireTilemap(int line) {

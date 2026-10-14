@@ -12,6 +12,7 @@ import sev7n.scene.Behaviour;
 import sev7n.scene.BoxCollider;
 import sev7n.scene.Entity;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
@@ -297,13 +298,31 @@ public final class Game {
         });
     }
 
-    /** Moves every Sprite Animator along and shows the right frame. */
+    /** Moves every Sprite Animator and particle effect along. Finished one-off effects are removed. */
     private void animate(double dt) {
+        Solids solids = null; // gathered once, only if some effect bounces off things
         for (Entity entity : scene.entities()) {
+            if (!entity.active) continue;
             SpriteAnimator animator = entity.get(SpriteAnimator.class);
             SpriteRenderer sprite = entity.get(SpriteRenderer.class);
-            if (entity.active && animator != null && sprite != null) animator.update(dt, sprite);
+            if (animator != null && sprite != null) animator.update(dt, sprite);
+            ParticleEmitter emitter = entity.get(ParticleEmitter.class);
+            if (emitter != null) {
+                if (emitter.collide && solids == null) solids = Solids.of(scene);
+                emitter.update(dt, entity.transform, solids);
+                if (emitter.destroyWhenDone && emitter.done()) destroy(entity);
+            }
         }
+    }
+
+    /** A one-off particle effect from a preset (e.g. "Explosion") that removes itself when it's over. */
+    EntityProxy spawnEffect(String preset, Vec3 position) {
+        Entity entity = scene.create(scene.uniqueName(preset));
+        ParticleEmitter emitter = entity.add(ParticleEmitter.preset(preset));
+        emitter.loop = false;
+        emitter.destroyWhenDone = true;
+        entity.transform.position.set(position);
+        return proxy(entity);
     }
 
     private void notifyCollision(Entity self, Entity other) {
