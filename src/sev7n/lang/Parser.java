@@ -285,7 +285,7 @@ public class Parser {
             if (match(LEFT_PAREN)) {
                 expr = finishCall(expr);
             } else if (match(DOT)) {
-                expr = new Expr.Get(expr, consume(IDENTIFIER, "Expected a property name after '.'"));
+                expr = new Expr.Get(expr, propertyName());
             } else if (match(LEFT_BRACKET)) {
                 Token bracket = previous();
                 Expr index = expression();
@@ -347,6 +347,16 @@ public class Parser {
             }
         }
         return false;
+    }
+
+    /** The name after a dot. Keywords are fine there (entity.behaviour("Name")), since a name can't mean anything else. */
+    private Token propertyName() {
+        Token name = peek();
+        if (name.type() != IDENTIFIER && (name.text() == null || !name.text().matches("[A-Za-z_]\\w*"))) {
+            throw new SevenError("Expected a property name after '.'", name.line());
+        }
+        advance();
+        return name.type() == IDENTIFIER ? name : new Token(IDENTIFIER, name.text(), null, name.line(), name.file());
     }
 
     private Token consume(TokenType type, String message) {

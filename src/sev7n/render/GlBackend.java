@@ -30,6 +30,16 @@ public final class GlBackend implements GraphicsBackend {
     }
 
     @Override
+    public GpuMesh dynamicMesh(MeshData data) {
+        return new Mesh(data, true);
+    }
+
+    @Override
+    public void updateMesh(GpuMesh mesh, float[] vertices) {
+        ((Mesh) mesh).update(vertices);
+    }
+
+    @Override
     public GpuTexture texture(BufferedImage image, boolean pixelArt) {
         return Texture.fromImage(image, pixelArt);
     }
@@ -68,14 +78,14 @@ public final class GlBackend implements GraphicsBackend {
     }
 
     @Override
-    public void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow) {
+    public void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow, float u, float v, float width, float height) {
         use(Mode.PARTICLE);
         glBlendFunc(GL_SRC_ALPHA, glow ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA); // glowing particles add their light
         if (texture != null) ((Texture) texture).bind(0);
         sprite.set("uUseTexture", texture != null ? 1 : 0);
         sprite.setRgba("uTint", tint);
         sprite.set("uModel", model);
-        sprite.set("uUVRect", 0, 0, 1, 1);
+        sprite.set("uUVRect", u, v, width, height);
         ((Mesh) mesh).draw();
     }
 

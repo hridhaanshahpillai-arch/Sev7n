@@ -8,10 +8,14 @@ import sev7n.lang.SevenError;
 import sev7n.lang.runtime.BehaviourClass;
 import sev7n.lang.runtime.BehaviourInstance;
 import sev7n.math.Vec3;
+import sev7n.scene.Animator;
 import sev7n.scene.Behaviour;
 import sev7n.scene.BoxCollider;
 import sev7n.scene.Entity;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.Npc;
+import sev7n.scene.Ragdoll;
+import sev7n.scene.Rigidbody;
 import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
 import sev7n.scene.SpriteAnimator;
@@ -33,12 +37,13 @@ import java.util.stream.Stream;
 /**
  * A running game: a scene plus its behaviours.
  *
- * Every frame (update):
- *   1. update(dt) on every behaviour
- *   2. physics moves rigidbodies
- *   3. sprite animators pick their frames
- *   4. onCollide(other) for colliders that started touching
- *   5. destroyed entities are removed
+ * Every frame (update), with dt multiplied by the time scale (0 while a pause menu is open):
+ *   1. update(dt) on every behaviour, then lateUpdate(dt)
+ *   2. NPCs look around, decide and walk; the clock moves on
+ *   3. physics moves rigidbodies, and limp ragdolls tumble
+ *   4. sprite animators pick their frames
+ *   5. onCollide(other) for colliders that started touching
+ *   6. destroyed entities are removed
  *
  * If a script fails, the error goes to the log and failed() becomes true.
  */
@@ -50,11 +55,25 @@ public final class Game {
     private final Interpreter seven;
     private final Collisions collisions = new Collisions();
     private final Physics physics = new Physics();
+    private final Tweens tweens = new Tweens();
+    private Sound sound = new Sound(Path.of("."));
 
     private final Map<Entity, List<BehaviourInstance>> behaviours = new LinkedHashMap<>();
     private final Map<Entity, EntityProxy> proxies = new HashMap<>();
+    private final Map<Entity, NpcBrain> brains = new LinkedHashMap<>();
+    private final Map<Entity, Limp> limp = new HashMap<>();
+    private final NpcBrain.Events npcEvents = this::notify;
     private final Set<Entity> destroyQueue = new LinkedHashSet<>();
     private double time = 0;
+    /** 1 = normal, 0 = the world stands still (pause menus), 0.3 = slow motion. Scripts still run. */
+    private double timeScale = 1;
+    private boolean quitRequested;
+    private boolean restartRequested;
+    private final Ui ui;
+    /** The time of day in the game, 0..24 (see hour() in scripts). */
+    private double hour = 8;
+    /** Real seconds in one game day. */
+    private double dayLength = 600;
     private boolean failed = false;
 
     public Game(Scene scene, Log log, Input input) {
@@ -62,6 +81,7 @@ public final class Game {
         this.log = log;
         this.input = input;
         this.seven = new Interpreter(log::info);
+        this.ui = new Ui(input, scene.hud);
         EngineApi.install(seven, this);
     }
 
@@ -69,6 +89,7 @@ public final class Game {
 
     /** Loads every script, attaches behaviours and calls start(). Returns false on errors. */
     public boolean start(Path scriptsFolder) {
+        if (scriptsFolder.toAbsolutePath().getParent() != null) sound = new Sound(scriptsFolder.toAbsolutePath().getParent());
         return guard(() -> {
             loadScripts(scriptsFolder);
             for (Entity entity : new ArrayList<>(scene.entities())) {
@@ -87,27 +108,78 @@ public final class Game {
 
     public void update(double dt) {
         if (failed) return;
+        dt *= timeScale;
         time += dt;
+        scene.hud.clear(); // scripts draw the HUD afresh every frame
+        ui.beginFrame();
+        final double scaled = dt;
         guard(() -> {
             for (Map.Entry<Entity, List<BehaviourInstance>> entry : new ArrayList<>(behaviours.entrySet())) {
                 if (!entry.getKey().active || destroyQueue.contains(entry.getKey())) continue;
                 for (BehaviourInstance instance : new ArrayList<>(entry.getValue())) {
-                    seven.callMethod(instance, "update", dt);
+                    seven.callMethod(instance, "update", scaled);
                 }
             }
-            physics.step(scene, dt);
-            animate(dt);
+            // lateUpdate(dt) runs after every update: cameras that follow, menus drawn over everything else
+            for (Map.Entry<Entity, List<BehaviourInstance>> entry : new ArrayList<>(behaviours.entrySet())) {
+                if (!entry.getKey().active || destroyQueue.contains(entry.getKey())) continue;
+                for (BehaviourInstance instance : new ArrayList<>(entry.getValue())) {
+                    seven.callMethod(instance, "lateUpdate", scaled);
+                }
+            }
+            tweens.update(scaled, seven::callFunction);
+            hour = (hour + scaled * 24 / dayLength) % 24;
+            updateNpcs(scaled);
+            physics.step(scene, scaled);
+            if (scaled > 0) updateRagdolls(scaled);
+            animate(scaled);
             for (Collisions.Contact contact : collisions.newContacts(scene)) {
                 notifyCollision(contact.a(), contact.b());
                 notifyCollision(contact.b(), contact.a());
             }
         });
         flushDestroyed();
+        ui.endFrame();
         input.endFrame();
     }
 
     public Scene scene() {
         return scene;
+    }
+
+    /** True once a script called quit(): the editor stops playing, a game window closes. */
+    public boolean quitRequested() {
+        return quitRequested;
+    }
+
+    /** True once a script called restart(): whoever runs the game starts it again from the scene file. */
+    public boolean restartRequested() {
+        return restartRequested;
+    }
+
+    void quit() {
+        quitRequested = true;
+    }
+
+    void restart() {
+        restartRequested = true;
+    }
+
+    double timeScale() {
+        return timeScale;
+    }
+
+    void setTimeScale(double scale) {
+        timeScale = Math.max(0, scale);
+    }
+
+    Ui ui() {
+        return ui;
+    }
+
+    /** The game is over (Stop pressed, window closed): silences its sounds and music. */
+    public void stop() {
+        sound.stopAll();
     }
 
     /** Every name scripts get for free (core + engine functions), e.g. for syntax highlighting. */
@@ -133,14 +205,17 @@ public final class Game {
         return physics;
     }
 
+    Sound sound() {
+        return sound;
+    }
+
+    Tweens tweens() {
+        return tweens;
+    }
+
     /** True if a point is inside something solid: a non-trigger collider or a solid tile. */
     boolean solidAt(Vec3 point) {
-        Box probe = new Box(point.x, point.y, point.z, point.x, point.y, point.z);
-        for (Entity entity : scene.entities()) {
-            BoxCollider collider = entity.get(BoxCollider.class);
-            if (entity.active && collider != null && !collider.trigger && Box.of(entity, collider).touches(probe, 0)) return true;
-        }
-        return Physics.solidTileAt(scene, point);
+        return Physics.solidAt(scene, point);
     }
 
     EntityProxy proxy(Entity entity) {
@@ -306,6 +381,8 @@ public final class Game {
             SpriteAnimator animator = entity.get(SpriteAnimator.class);
             SpriteRenderer sprite = entity.get(SpriteRenderer.class);
             if (animator != null && sprite != null) animator.update(dt, sprite);
+            Animator modelAnimator = entity.get(Animator.class);
+            if (modelAnimator != null) modelAnimator.update(dt);
             ParticleEmitter emitter = entity.get(ParticleEmitter.class);
             if (emitter != null) {
                 if (emitter.collide && solids == null) solids = Solids.of(scene);
@@ -325,6 +402,132 @@ public final class Game {
         return proxy(entity);
     }
 
+    // ---------------------------------------------------------------- ragdolls
+
+    /** A limp body, plus where the entity sits relative to its hips and how high its origin is above its feet. */
+    private record Limp(RagdollSim sim, Vec3 offset, double feet, int head) { }
+
+    /**
+     * Starts, moves and ends ragdolls: a Ragdoll switched to active starts falling from the pose
+     * it was drawn in (keeping its Rigidbody's speed); switched back, the entity stands up where
+     * its hips ended up. While limp, the entity follows its hips, so cameras following it still work.
+     */
+    private void updateRagdolls(double dt) {
+        for (Entity entity : scene.entities()) {
+            Ragdoll ragdoll = entity.get(Ragdoll.class);
+            if (ragdoll == null || !entity.active) continue;
+            Limp body = limp.get(entity);
+            if (ragdoll.active && body == null) {
+                if (ragdoll.skeleton == null || ragdoll.pose == null) {
+                    ragdoll.active = false; // never drawn yet, so there's no pose to fall from
+                    continue;
+                }
+                body = goLimp(entity, ragdoll);
+                limp.put(entity, body);
+            }
+            if (ragdoll.active) {
+                body.sim().step(scene, dt, physics.gravity, entity);
+                ragdoll.points = body.sim().positions();
+                entity.transform.position.set(body.sim().position(0).minus(body.offset()));
+            } else if (body != null) {
+                standUp(entity, body);
+                limp.remove(entity);
+            }
+        }
+    }
+
+    private Limp goLimp(Entity entity, Ragdoll ragdoll) {
+        entity.transform.position.set(ragdoll.poseOrigin); // where it was in the pose it falls from
+        Vec3 velocity = new Vec3(ragdoll.pushX, ragdoll.pushY, ragdoll.pushZ);
+        ragdoll.pushX = ragdoll.pushY = ragdoll.pushZ = 0;
+        Rigidbody body = entity.get(Rigidbody.class);
+        if (body != null) {
+            velocity = velocity.plus(body.velocity);
+            body.velocity.set(0, 0, 0);
+        }
+        RagdollSim sim = new RagdollSim(ragdoll.skeleton, ragdoll.pose, ragdoll.poseForward, velocity, ragdoll);
+        ragdoll.points = sim.positions();
+        ragdoll.fall++;
+        Vec3 hips = sim.position(0);
+        int head = 0; // the highest bone while standing
+        for (int b = 1; b < ragdoll.skeleton.size(); b++) if (ragdoll.pose[b * 3 + 1] > ragdoll.pose[head * 3 + 1]) head = b;
+        return new Limp(sim, hips.minus(entity.transform.position), entity.transform.position.y - sim.lowest(), head);
+    }
+
+    /**
+     * Puts the entity back on its feet under where its hips are, facing from its head toward its
+     * feet: the way get-up animations stand up from lying on the back.
+     */
+    private void standUp(Entity entity, Limp body) {
+        Vec3 hips = body.sim().position(0);
+        Vec3 towardFeet = hips.minus(body.sim().position(body.head()));
+        if (Math.hypot(towardFeet.x, towardFeet.z) > 0.1) {
+            entity.transform.rotation.y = Math.toDegrees(Math.atan2(-towardFeet.x, -towardFeet.z));
+        }
+        double ground = body.sim().lowest();
+        Physics.RayHit hit = Physics.raycast(scene, hips, new Vec3(0, -1, 0), 10, entity);
+        if (hit != null) ground = hit.point().y;
+        entity.transform.position.set(hips.x, ground + body.feet(), hips.z);
+    }
+
+    // ---------------------------------------------------------------- NPCs
+
+    double hour() {
+        return hour;
+    }
+
+    void setHour(double value) {
+        hour = ((value % 24) + 24) % 24;
+    }
+
+    double dayLength() {
+        return dayLength;
+    }
+
+    void setDayLength(double seconds) {
+        dayLength = Math.max(1, seconds);
+    }
+
+    /** The mind of an entity with an NPC component (made the first time it's needed), or null. */
+    NpcBrain brain(Entity entity) {
+        Npc npc = entity.get(Npc.class);
+        if (npc == null) return null;
+        NpcBrain brain = brains.get(entity);
+        if (brain == null || brain.npc != npc) brains.put(entity, brain = new NpcBrain(entity, npc));
+        return brain;
+    }
+
+    private void updateNpcs(double dt) {
+        for (Entity entity : new ArrayList<>(scene.entities())) {
+            if (!entity.active || destroyQueue.contains(entity) || Ragdoll.limp(entity)) continue;
+            NpcBrain brain = brain(entity);
+            if (brain != null) brain.update(scene, dt, time, hour, npcEvents);
+        }
+    }
+
+    /** A noise NPCs can hear: those within their hearing range (times loudness) react. */
+    void makeNoise(Vec3 position, double loudness, Entity source) {
+        for (Entity entity : new ArrayList<>(scene.entities())) {
+            if (entity == source || !entity.active) continue;
+            NpcBrain brain = brain(entity);
+            if (brain != null && entity.transform.position.distance(position) <= brain.npc.hearing * loudness) {
+                brain.hear(position, source, time, npcEvents);
+            }
+        }
+    }
+
+    /** Calls a method (e.g. "onSee") on every behaviour of an entity; entities in the arguments become script entities. */
+    private void notify(Entity self, String method, Object... args) {
+        if (destroyQueue.contains(self)) return;
+        Object[] values = args.clone();
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] instanceof Entity e) values[i] = proxy(e);
+        }
+        for (BehaviourInstance instance : new ArrayList<>(behaviours.getOrDefault(self, List.of()))) {
+            seven.callMethod(instance, method, values);
+        }
+    }
+
     private void notifyCollision(Entity self, Entity other) {
         if (destroyQueue.contains(self)) return;
         for (BehaviourInstance instance : new ArrayList<>(behaviours.getOrDefault(self, List.of()))) {
@@ -338,6 +541,10 @@ public final class Game {
             behaviours.remove(entity);
             proxies.remove(entity);
             collisions.forget(entity);
+            tweens.forget(entity);
+            brains.remove(entity);
+            limp.remove(entity);
+            for (NpcBrain brain : brains.values()) brain.forget(entity);
         }
         destroyQueue.clear();
     }

@@ -286,7 +286,8 @@ public final class EditorApp implements MainMenu.Actions {
 
     /** For automated checks. Returns true when the test run is finished. */
     private boolean runTestStep(TestRun test, int frame) {
-        if (frame == 5 && test.select() != null) ctx.select(ctx.scene().find(test.select()));
+        // kept selected every frame: the test window may get stray clicks from whoever is using the PC
+        if (frame >= 5 && test.select() != null) ctx.select(ctx.scene().find(test.select()));
         if (frame == 5 && test.guide() != null) {
             if (test.guide().equals("settings")) openSettings();
             else if (test.guide().equals("window")) ctx.playInWindow();

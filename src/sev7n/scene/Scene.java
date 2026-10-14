@@ -8,6 +8,8 @@ import java.util.List;
 public final class Scene {
 
     public String name;
+    /** Text, bars and pictures drawn over the game this frame (not saved). */
+    public final Hud hud = new Hud();
     private final List<Entity> entities = new ArrayList<>();
     private long nextId = 1;
 

@@ -24,6 +24,12 @@ public interface GraphicsBackend extends AutoCloseable {
 
     GpuMesh mesh(MeshData data);
 
+    /** Geometry whose vertices change (animated characters). The vertex count and triangles never change. */
+    GpuMesh dynamicMesh(MeshData data);
+
+    /** New vertices for a dynamicMesh, in the same layout and number. Call while drawing a frame, before drawing it. */
+    void updateMesh(GpuMesh mesh, float[] vertices);
+
     /** @param pixelArt true keeps pixels sharp (no smoothing) */
     GpuTexture texture(BufferedImage image, boolean pixelArt);
 
@@ -42,7 +48,12 @@ public interface GraphicsBackend extends AutoCloseable {
      * A particle: a see-through card (the whole texture times the tint, or a plain card if null)
      * that is depth tested but never hides what's drawn after it. Glowing ones add their light.
      */
-    void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow);
+    default void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow) {
+        drawParticle(mesh, texture, model, tint, glow, 0, 0, 1, 1);
+    }
+
+    /** A particle showing only the part (u, v, width, height) of its texture (glowing HUD shapes). */
+    void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow, float u, float v, float width, float height);
 
     /**
      * Flat-colored lines (grid, outlines) that fade out between fadeStart and fadeEnd from the eye.

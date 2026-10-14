@@ -10,18 +10,24 @@ import sev7n.math.Vec3;
 import sev7n.project.AssetImporter;
 import sev7n.project.AssetKind;
 import sev7n.project.Project;
+import sev7n.render.Model;
 import sev7n.render.ObjLoader;
 import sev7n.render.RenderSettings;
 import sev7n.render.SceneRenderer;
 import sev7n.render.Texture;
+import sev7n.scene.Animator;
 import sev7n.scene.BoxCollider;
 import sev7n.scene.Camera;
+import sev7n.scene.CapsuleCollider;
 import sev7n.scene.Entity;
 import sev7n.scene.Light;
 import sev7n.scene.MeshRenderer;
+import sev7n.scene.Npc;
 import sev7n.scene.ParticleEmitter;
+import sev7n.scene.Rigidbody;
 import sev7n.scene.Scene;
 import sev7n.scene.SceneSerializer;
+import sev7n.scene.SphereCollider;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
 import sev7n.scene.Tilemap;
@@ -54,7 +60,7 @@ import java.util.stream.Stream;
 final class EditorContext {
 
     /** Things the Create menus can make. */
-    static final List<String> CREATABLE = List.of("Empty", "Cube", "Sphere", "Plane", "Cylinder", "Sprite", "Tilemap", "Camera", "Light");
+    static final List<String> CREATABLE = List.of("Empty", "Cube", "Sphere", "Plane", "Cylinder", "Sprite", "Tilemap", "Camera", "Light", "NPC");
 
     final Project project;
     final Log log = new Log();
@@ -198,6 +204,8 @@ final class EditorContext {
             mesh.mesh = path;
             applyModelMaterial(mesh, path);
             entity.add(new BoxCollider());
+            Model model = renderer.model(path);
+            if (model.rig != null && !model.rig.clips.isEmpty()) entity.add(new Animator()); // it moves straight away
         }
         select(entity);
         markDirty();
@@ -287,6 +295,17 @@ final class EditorContext {
                 entity.add(new Light());
             }
             case "Empty" -> { }
+            case "NPC" -> {
+                // a pill-shaped character that walks around by itself, ready for a model or sprite
+                entity.transform.position.set(0, 0.9, 0);
+                entity.transform.scale.set(0.8, 1.8, 0.8);
+                MeshRenderer body = entity.add(new MeshRenderer());
+                body.mesh = "cylinder";
+                body.color = sev7n.ui.Theme.ACCENT;
+                entity.add(new CapsuleCollider()).height = 1;
+                entity.add(new Rigidbody());
+                entity.add(new Npc()).idle = "Wander";
+            }
             case "Tilemap" -> {
                 entity.add(new Tilemap());
                 paintTiles(entity);
@@ -301,7 +320,8 @@ final class EditorContext {
                 if (kind.equals("Plane")) entity.transform.scale.set(5, 1, 5);
                 else {
                     entity.transform.position.set(0, 0.5, 0);
-                    entity.add(new BoxCollider());
+                    if (kind.equals("Sphere")) entity.add(new SphereCollider());
+                    else entity.add(new BoxCollider());
                 }
             }
         }
@@ -417,6 +437,7 @@ final class EditorContext {
         log.system("Playing " + project.name() + "  (click the Game view to give it the keyboard)"
                 + (editorSettings.liveMode ? "  ·  Live Mode: your edits are kept, saved scripts reload" : ""));
         if (!game.start(project.scriptsFolder())) {
+            game.stop();
             game = null;
             log.system("Stopped: fix the error above, then press Play again");
             return;
@@ -428,6 +449,7 @@ final class EditorContext {
     void stop() {
         if (game == null) return;
         if (live()) liveEdits.apply(game.scene(), editScene);
+        game.stop();
         game = null;
         paused = false;
         stoppedByError = false;
@@ -495,6 +517,15 @@ final class EditorContext {
             reloadChangedScripts(dt);
         }
         if (!paused) game.update(dt);
+        if (game.quitRequested()) {
+            stop(); // quit() in a script: in the editor, that's Stop
+            return;
+        }
+        if (game.restartRequested()) {
+            stop();
+            play();
+            return;
+        }
         if (game.failed() && !stoppedByError) {
             if (live()) {
                 paused = true;
@@ -542,10 +573,18 @@ final class EditorContext {
         return times;
     }
 
-    /** Particle effects always play in the editor, so you see what you're making; one-off effects repeat. */
+    /**
+     * Particle effects and model animations always play in the editor, so you see what you're
+     * making; one-off effects repeat.
+     */
     private void previewEffects(double dt) {
         Solids solids = null; // gathered once, only if some effect bounces off things
         for (Entity entity : editScene.entities()) {
+            Animator animator = entity.get(Animator.class);
+            if (animator != null && entity.active) {
+                animator.update(dt);
+                if (animator.done()) animator.stop(); // a one-off animation: play it again
+            }
             ParticleEmitter emitter = entity.get(ParticleEmitter.class);
             if (emitter == null) continue;
             if (!entity.active) {

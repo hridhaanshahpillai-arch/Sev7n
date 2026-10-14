@@ -291,24 +291,56 @@ public final class VulkanBackend implements GraphicsBackend {
 
     // ---------------------------------------------------------------- meshes and textures
 
-    /** Geometry in GPU memory: vertices first, then the indices. */
+    /**
+     * Geometry in GPU memory. A static mesh keeps its vertices and then its indices in one
+     * buffer. A dynamic one (animated characters) keeps its indices on the GPU and a vertex
+     * buffer the CPU writes for each frame in flight, so it never changes one the GPU is reading.
+     */
     private final class VkMesh implements GpuMesh {
-        final VulkanDevice.Buffer buffer; // null for an empty mesh
+        final VulkanDevice.Buffer buffer; // static: vertices + indices; dynamic: indices only; null if empty
         final long indexOffset;
         final int indexCount;
         private final Vector3f boundsMin;
         private final Vector3f boundsMax;
+        private final VulkanDevice.Buffer[] frameVertices; // dynamic meshes only
+        private final long[] frameAddresses;
+        private int latest; // which frame's vertex buffer has the newest vertices
 
-        VkMesh(MeshData data) {
+        VkMesh(MeshData data, boolean dynamic) {
             boundsMin = data.boundsMin();
             boundsMax = data.boundsMax();
             indexCount = data.indices().length;
             long vertexBytes = (long) data.vertices().length * Float.BYTES;
-            indexOffset = vertexBytes;
             if (indexCount == 0) {
                 buffer = null;
+                indexOffset = 0;
+                frameVertices = null;
+                frameAddresses = null;
                 return;
             }
+            if (dynamic) {
+                indexOffset = 0;
+                ByteBuffer indices = MemoryUtil.memAlloc(indexCount * Integer.BYTES);
+                indices.asIntBuffer().put(data.indices());
+                buffer = upload(indices, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+                MemoryUtil.memFree(indices);
+                frameVertices = new VulkanDevice.Buffer[VulkanDevice.FRAMES_IN_FLIGHT];
+                frameAddresses = new long[VulkanDevice.FRAMES_IN_FLIGHT];
+                try (MemoryStack stack = stackPush()) {
+                    for (int i = 0; i < frameVertices.length; i++) {
+                        frameVertices[i] = vk.buffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                        var pointer = stack.mallocPointer(1);
+                        VulkanDevice.check(vkMapMemory(vk.device, frameVertices[i].memory(), 0, vertexBytes, 0, pointer), "map memory");
+                        frameAddresses[i] = pointer.get(0);
+                        MemoryUtil.memFloatBuffer(frameAddresses[i], data.vertices().length).put(data.vertices());
+                    }
+                }
+                return;
+            }
+            indexOffset = vertexBytes;
+            frameVertices = null;
+            frameAddresses = null;
             long size = vertexBytes + (long) indexCount * Integer.BYTES;
             ByteBuffer bytes = MemoryUtil.memAlloc((int) size);
             bytes.asFloatBuffer().put(data.vertices());
@@ -317,6 +349,17 @@ public final class VulkanBackend implements GraphicsBackend {
             bytes.position(0);
             buffer = upload(bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
             MemoryUtil.memFree(bytes);
+        }
+
+        long vertexBuffer() {
+            return frameVertices != null ? frameVertices[latest].handle() : buffer.handle();
+        }
+
+        /** Writes this frame's vertex buffer (the GPU has finished the last frame that used it). */
+        void update(float[] vertices, int frame) {
+            if (frameVertices == null) throw new IllegalStateException("Only dynamic meshes can be updated");
+            MemoryUtil.memFloatBuffer(frameAddresses[frame], vertices.length).put(vertices);
+            latest = frame;
         }
 
         @Override
@@ -332,6 +375,12 @@ public final class VulkanBackend implements GraphicsBackend {
         @Override
         public void close() {
             if (buffer != null) vk.later(() -> vk.destroy(buffer));
+            if (frameVertices != null) {
+                VulkanDevice.Buffer[] old = frameVertices.clone();
+                vk.later(() -> {
+                    for (VulkanDevice.Buffer b : old) vk.destroy(b); // freeing the memory unmaps it
+                });
+            }
         }
     }
 
@@ -375,7 +424,18 @@ public final class VulkanBackend implements GraphicsBackend {
 
     @Override
     public GpuMesh mesh(MeshData data) {
-        return new VkMesh(data);
+        return new VkMesh(data, false);
+    }
+
+    @Override
+    public GpuMesh dynamicMesh(MeshData data) {
+        return new VkMesh(data, true);
+    }
+
+    @Override
+    public void updateMesh(GpuMesh mesh, float[] vertices) {
+        if (commands == null) throw new IllegalStateException("Vulkan meshes can only be updated during a frame");
+        ((VkMesh) mesh).update(vertices, slot);
     }
 
     /** Copies bytes into a new GPU-only buffer (through a temporary buffer the CPU can write). */
@@ -579,9 +639,9 @@ public final class VulkanBackend implements GraphicsBackend {
     }
 
     @Override
-    public void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow) {
+    public void drawParticle(GpuMesh mesh, GpuTexture texture, Matrix4f model, Color tint, boolean glow, float u, float v, float width, float height) {
         draw(glow ? particleGlow : particle, (VkMesh) mesh, (VkTexture) texture, model,
-                tint.getRed() / 255f, tint.getGreen() / 255f, tint.getBlue() / 255f, tint.getAlpha() / 255f, 0, 0, 1, 1, 0, 0);
+                tint.getRed() / 255f, tint.getGreen() / 255f, tint.getBlue() / 255f, tint.getAlpha() / 255f, u, v, width, height, 0, 0);
     }
 
     @Override
@@ -610,7 +670,7 @@ public final class VulkanBackend implements GraphicsBackend {
             putVec4(push, 80, u, v, uvWidth, uvHeight);
             putVec4(push, 96, texture != null ? 1 : 0, 0, fadeStart, fadeEnd);
             vkCmdPushConstants(commands, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
-            vkCmdBindVertexBuffers(commands, 0, stack.longs(mesh.buffer.handle()), stack.longs(0));
+            vkCmdBindVertexBuffers(commands, 0, stack.longs(mesh.vertexBuffer()), stack.longs(0));
             vkCmdBindIndexBuffer(commands, mesh.buffer.handle(), mesh.indexOffset, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(commands, mesh.indexCount, 1, 0, 0, 0);
         }

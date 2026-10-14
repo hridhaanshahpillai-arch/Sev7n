@@ -118,6 +118,51 @@ public record MeshData(float[] vertices, int[] indices, boolean lines, Vector3f 
         return b.build(true, UNIT_MIN, UNIT_MAX);
     }
 
+    /** Three circles (around X, Y and Z) of a ball 1 across: sphere collider outlines. */
+    public static MeshData wireSphere(int segments) {
+        Builder b = new Builder();
+        for (int axis = 0; axis < 3; axis++) {
+            int first = -1;
+            int previous = -1;
+            for (int i = 0; i < segments; i++) {
+                double a = 2 * Math.PI * i / segments;
+                float c = (float) (Math.cos(a) * .5);
+                float s = (float) (Math.sin(a) * .5);
+                int point = axis == 0 ? b.point(0, c, s) : axis == 1 ? b.point(c, 0, s) : b.point(c, s, 0);
+                if (previous >= 0) b.line(previous, point);
+                else first = point;
+                previous = point;
+            }
+            b.line(previous, first);
+        }
+        return b.build(true, UNIT_MIN, UNIT_MAX);
+    }
+
+    /** A flat wedge facing -Z with radius 1, 'degrees' wide (360 = a circle): what an NPC can see. */
+    public static MeshData wireFan(int degrees) {
+        Builder b = new Builder();
+        int segments = Math.max(4, degrees / 6);
+        double half = Math.toRadians(degrees) / 2;
+        int center = b.point(0, 0, 0);
+        int previous = -1;
+        for (int i = 0; i <= segments; i++) {
+            double a = -half + 2 * half * i / segments;
+            int point = b.point((float) -Math.sin(a), 0, (float) -Math.cos(a));
+            if (previous >= 0) b.line(previous, point);
+            if ((i == 0 || i == segments) && degrees < 360) b.line(center, point);
+            previous = point;
+        }
+        return b.build(true, new Vector3f(-1, 0, -1), new Vector3f(1, 0, 1));
+    }
+
+    /** Four upright lines around a 1 x 1 x 1 cylinder: the sides of capsule collider outlines. */
+    public static MeshData wireCapsuleSides() {
+        Builder b = new Builder();
+        float[][] corners = {{.5f, 0}, {-.5f, 0}, {0, .5f}, {0, -.5f}};
+        for (float[] c : corners) b.line(b.point(c[0], -.5f, c[1]), b.point(c[0], .5f, c[1]));
+        return b.build(true, UNIT_MIN, UNIT_MAX);
+    }
+
     /** Floor grid lines from -halfSize to +halfSize, one unit apart, at y = 0. */
     public static MeshData grid(int halfSize) {
         Builder b = new Builder();

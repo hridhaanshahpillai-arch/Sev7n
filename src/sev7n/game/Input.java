@@ -58,6 +58,25 @@ public final class Input {
     }
 
     /** Mouse position in game-view pixels, (0, 0) at the top-left. */
+    private double viewWidth = 1280;
+    private double viewHeight = 720;
+
+    /** How big the game's view is in pixels (mouse positions are in the same pixels). */
+    public void setViewSize(double width, double height) {
+        if (width > 0 && height > 0) {
+            viewWidth = width;
+            viewHeight = height;
+        }
+    }
+
+    double viewWidth() {
+        return viewWidth;
+    }
+
+    double viewHeight() {
+        return viewHeight;
+    }
+
     public void mouseMoved(double x, double y) {
         mouseX = x;
         mouseY = y;

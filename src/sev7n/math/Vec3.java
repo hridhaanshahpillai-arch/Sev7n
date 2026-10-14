@@ -80,6 +80,52 @@ public final class Vec3 {
         return length == 0 ? new Vec3() : times(1 / length);
     }
 
+    /** The point 't' of the way from this to 'o' (0 = this, 1 = o). */
+    public Vec3 lerp(Vec3 o, double t) {
+        return new Vec3(x + (o.x - x) * t, y + (o.y - y) * t, z + (o.z - z) * t);
+    }
+
+    /** Moves toward 'target' by at most 'maxDistance', without overshooting. */
+    public Vec3 moveTowards(Vec3 target, double maxDistance) {
+        Vec3 delta = target.minus(this);
+        double distance = delta.length();
+        return distance <= maxDistance || distance == 0 ? target.copy() : plus(delta.times(maxDistance / distance));
+    }
+
+    /** The angle between two directions, in degrees (0..180). */
+    public double angle(Vec3 o) {
+        double lengths = length() * o.length();
+        return lengths == 0 ? 0 : Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, dot(o) / lengths))));
+    }
+
+    /** The part of this vector that points along 'onto'. */
+    public Vec3 project(Vec3 onto) {
+        double lengthSquared = onto.dot(onto);
+        return lengthSquared == 0 ? new Vec3() : onto.times(dot(onto) / lengthSquared);
+    }
+
+    /** Bounces this direction off a surface facing 'normal' (like a ball off a wall). */
+    public Vec3 reflect(Vec3 normal) {
+        Vec3 n = normal.normalized();
+        return minus(n.times(2 * dot(n)));
+    }
+
+    /** Turned around 'axis' by 'degrees' (right-hand rule: positive turns counter-clockwise looking down the axis). */
+    public Vec3 rotate(Vec3 axis, double degrees) {
+        Vec3 k = axis.normalized();
+        double a = Math.toRadians(degrees);
+        double cos = Math.cos(a);
+        double sin = Math.sin(a);
+        // Rodrigues' rotation formula
+        return times(cos).plus(k.cross(this).times(sin)).plus(k.times(k.dot(this) * (1 - cos)));
+    }
+
+    /** Same direction, at most 'max' long. */
+    public Vec3 clampLength(double max) {
+        double length = length();
+        return length <= max ? copy() : times(max / length);
+    }
+
     public double[] toArray() {
         return new double[] {x, y, z};
     }

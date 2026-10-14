@@ -23,7 +23,7 @@ import java.util.Random;
 public final class ParticleEmitter extends Component {
 
     public static final List<String> PRESETS = List.of(
-            "Fire", "Smoke", "Sparks", "Magic", "Explosion", "Fountain", "Debris", "Rain", "Snow", "Confetti");
+            "Fire", "Smoke", "Sparks", "Magic", "Explosion", "Fountain", "Debris", "Blood", "Rain", "Snow", "Confetti");
     private static final double GRAVITY = 9.8;
     private static final double STOP_BOUNCING = 0.4; // slower bounces than this just stop
 
@@ -438,6 +438,17 @@ public final class ParticleEmitter extends Component {
                 randomRotation = true;
                 spin = 360;
                 speedRandom = 0.5;
+            }
+            case "Blood" -> {
+                // a quick spray of dark red drops that splat on the ground
+                set(0, 1.6, 3.5, 50, 1, 0.3, 0.14, 0.1, new Color(205, 20, 35, 255), new Color(120, 5, 15, 0), false, 0.15);
+                burst = 60;
+                loop = false;
+                duration = 0.1;
+                speedRandom = 0.6;
+                lifetimeRandom = 0.3;
+                collide = true;
+                bounce = 0;
             }
             case "Rain" -> {
                 set(220, 1.2, 12, 2, 0, 0, 0.06, 0.06, new Color(150, 190, 255, 190), new Color(150, 190, 255, 140), false, 0);

@@ -117,6 +117,16 @@ final class Widgets {
         return value;
     }
 
+    private static final imgui.type.ImString textBuffer = new imgui.type.ImString(256);
+
+    /** A one-line text field. Returns the new text (or the old one if unchanged). */
+    static String text(String label, String value, String hint) {
+        label(label);
+        textBuffer.set(value);
+        boolean changed = ImGui.inputTextWithHint("##" + label, hint, textBuffer);
+        return changed ? textBuffer.get() : value;
+    }
+
     static String choice(String label, String current, List<String> options) {
         label(label);
         String result = current;

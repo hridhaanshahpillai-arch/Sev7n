@@ -1,17 +1,15 @@
 package sev7n.game;
 
-import sev7n.scene.BoxCollider;
 import sev7n.scene.Entity;
 import sev7n.scene.Scene;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /**
- * Finds colliders that started touching this frame (for onCollide).
- * Boxes resting against each other count as touching, so landing on a floor is reported once.
+ * Finds colliders (boxes, spheres, capsules) that started touching this frame (for onCollide).
+ * Things resting against each other count as touching, so landing on a floor is reported once.
  */
 final class Collisions {
 
@@ -19,25 +17,21 @@ final class Collisions {
 
     record Contact(Entity a, Entity b) { }
 
-    private record Collider(Entity entity, Box box) { }
-
     private final Set<String> touching = new HashSet<>();
 
     /** Contacts that are new since last frame. Contacts that continue aren't repeated. */
     List<Contact> newContacts(Scene scene) {
-        List<Collider> colliders = new ArrayList<>();
-        for (Entity entity : scene.entities()) {
-            BoxCollider collider = entity.get(BoxCollider.class);
-            if (entity.active && collider != null) colliders.add(new Collider(entity, Box.of(entity, collider)));
-        }
-
+        List<WorldCollider> colliders = new java.util.ArrayList<>(WorldCollider.all(scene, true));
+        // sorted left to right, each only needs checking against the ones that start before it ends ("sweep and prune")
+        colliders.sort(java.util.Comparator.comparingDouble(w -> w.bounds().minX()));
         Set<String> nowTouching = new HashSet<>();
-        List<Contact> started = new ArrayList<>();
+        List<Contact> started = new java.util.ArrayList<>();
         for (int i = 0; i < colliders.size(); i++) {
-            for (int j = i + 1; j < colliders.size(); j++) {
-                Collider a = colliders.get(i);
-                Collider b = colliders.get(j);
-                if (!a.box().touches(b.box(), TOUCH_MARGIN)) continue;
+            WorldCollider a = colliders.get(i);
+            double reach = a.bounds().maxX() + TOUCH_MARGIN;
+            for (int j = i + 1; j < colliders.size() && colliders.get(j).bounds().minX() <= reach; j++) {
+                WorldCollider b = colliders.get(j);
+                if (!a.touches(b, TOUCH_MARGIN)) continue;
                 String key = key(a.entity(), b.entity());
                 nowTouching.add(key);
                 if (!touching.contains(key)) started.add(new Contact(a.entity(), b.entity()));

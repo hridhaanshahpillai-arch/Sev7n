@@ -1,14 +1,21 @@
 package sev7n.render;
 
 import org.joml.Matrix4f;
+import org.joml.Quaternionf;
 import org.joml.Vector3f;
+import sev7n.math.Easing;
 import sev7n.math.Vec3;
+import sev7n.scene.Animator;
 import sev7n.scene.BoxCollider;
+import sev7n.scene.CapsuleCollider;
 import sev7n.scene.Entity;
 import sev7n.scene.Light;
+import sev7n.scene.Npc;
+import sev7n.scene.Ragdoll;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
+import sev7n.scene.SphereCollider;
 import sev7n.scene.SpriteFrame;
 import sev7n.scene.SpriteRenderer;
 import sev7n.scene.Tilemap;
@@ -18,6 +25,7 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,6 +49,10 @@ public final class SceneRenderer implements AutoCloseable {
     private final GpuMesh quad;
     private final GpuMesh grid;
     private final GpuMesh wireCube;
+    private final GpuMesh wireSphere;
+    private final GpuMesh wireCapsuleSides;
+    private final Map<Integer, GpuMesh> fans = new HashMap<>();
+    private final HudPainter hudPainter;
     private final GpuTexture softDot; // what particles look like without a picture
     private final AssetCache assets;
     private final Matrix4f model = new Matrix4f();
@@ -50,8 +62,9 @@ public final class SceneRenderer implements AutoCloseable {
     public record Bounds(Matrix4f matrix, Vector3f min, Vector3f max) { }
 
     /** What the editor shows on top of the scene. */
-    public record Overlays(boolean grid, Entity selected, boolean colliders) {
-        public static final Overlays NONE = new Overlays(false, null, false);
+    public record Overlays(boolean grid, Entity selected, boolean colliders, boolean hud) {
+        /** The game as players see it: no editor helpers, with the HUD. */
+        public static final Overlays NONE = new Overlays(false, null, false, true);
     }
 
     /** Draws with OpenGL (the window's context must be current). */
@@ -65,7 +78,10 @@ public final class SceneRenderer implements AutoCloseable {
         quad = gpu.mesh(MeshData.quad());
         grid = gpu.mesh(MeshData.grid(GRID_HALF_SIZE));
         wireCube = gpu.mesh(MeshData.wireCube());
+        wireSphere = gpu.mesh(MeshData.wireSphere(32));
+        wireCapsuleSides = gpu.mesh(MeshData.wireCapsuleSides());
         softDot = gpu.texture(softDotPicture(64), false);
+        hudPainter = new HudPainter(gpu, quad, assets);
         builtIn.put("cube", gpu.mesh(MeshData.cube()));
         builtIn.put("sphere", gpu.mesh(MeshData.sphere(32, 16)));
         builtIn.put("plane", gpu.mesh(MeshData.plane()));
@@ -105,7 +121,12 @@ public final class SceneRenderer implements AutoCloseable {
         if (overlays.grid()) drawGrid(view);
         drawSprites(scene, view);
         if (overlays.colliders()) drawColliders(scene);
-        if (overlays.selected() != null && scene.contains(overlays.selected())) drawOutline(overlays.selected());
+        if (overlays.selected() != null && scene.contains(overlays.selected())) {
+            drawOutline(overlays.selected());
+            Npc npc = overlays.selected().get(Npc.class);
+            if (npc != null) drawSenses(overlays.selected(), npc);
+        }
+        if (overlays.hud()) hudPainter.draw(scene.hud, view);
         gpu.end();
     }
 
@@ -129,18 +150,221 @@ public final class SceneRenderer implements AutoCloseable {
     // ---------------------------------------------------------------- meshes
 
     private void drawMeshes(Scene scene) {
+        Map<Entity, Posed> animated = poseCharacters(scene);
         for (Entity entity : scene.entities()) {
             ParticleEmitter emitter = entity.get(ParticleEmitter.class);
             if (entity.active && emitter != null && emitter.look == ParticleEmitter.Look.MODEL) drawModelParticles(emitter); // solid, so drawn with the meshes
             MeshRenderer renderer = entity.get(MeshRenderer.class);
             if (!entity.active || renderer == null) continue;
-            entity.transform.matrix(model);
+            entity.transform.matrix(model).rotateY((float) Math.toRadians(renderer.turn));
             // the renderer's texture (if set) replaces the model's own; its color tints every part
             GpuTexture override = assets.texture(renderer.texture, false);
-            for (Model.Part part : model(renderer.mesh).parts) {
-                gpu.drawLit(part.mesh(), override != null ? override : part.texture(), model, multiply(renderer.color, part.color()));
+            Model shape = model(renderer.mesh);
+            Posed character = animated.get(entity);
+            List<GpuMesh> posed = character != null && character.model == shape ? character.meshes : null;
+            for (int i = 0; i < shape.parts.size(); i++) {
+                Model.Part part = shape.parts.get(i);
+                GpuMesh mesh = posed != null && posed.get(i) != null ? posed.get(i) : part.mesh();
+                gpu.drawLit(mesh, override != null ? override : part.texture(), model, multiply(renderer.color, part.color()));
             }
         }
+    }
+
+    // ---------------------------------------------------------------- animated models
+
+    /** An animated entity's own copy of its model's meshes, posed every frame. */
+    private static final class Posed {
+        final Model model;
+        final List<GpuMesh> meshes = new ArrayList<>(); // null for parts that don't move
+        final List<float[]> vertices = new ArrayList<>();
+        final Matrix4f[] joints;
+        long usedAt;
+        // ragdolls: every node of the model as drawn last frame, as it was when it went limp, and as it is now
+        final Matrix4f[] lastNodes;
+        final Matrix4f[] limpStart;
+        final Matrix4f[] nodes;
+        final Quaternionf[] groupTurns = {new Quaternionf(), new Quaternionf()};
+        int fall = 0;
+        boolean limp = false;
+        boolean posedBefore = false;
+        // getting up: the last limp pose (in the world), blended out over the Ragdoll's blend time
+        final Matrix4f[] limpWorld;
+        boolean gettingUp = false;
+        long gotUpAt;
+
+        Posed(Model model, GraphicsBackend gpu) {
+            this.model = model;
+            joints = new Matrix4f[model.rig.jointCount()];
+            for (int j = 0; j < joints.length; j++) joints[j] = new Matrix4f();
+            lastNodes = matrices(model.rig.nodeCount());
+            limpStart = matrices(model.rig.nodeCount());
+            nodes = matrices(model.rig.nodeCount());
+            limpWorld = matrices(model.rig.nodeCount());
+            for (Model.Part part : model.parts) {
+                boolean skinned = part.source() != null && part.source().skin() != null;
+                meshes.add(skinned ? gpu.dynamicMesh(part.source().mesh()) : null);
+                vertices.add(skinned ? part.source().mesh().vertices().clone() : null);
+            }
+        }
+
+        void close() {
+            for (GpuMesh mesh : meshes) if (mesh != null) mesh.close();
+        }
+
+        private static Matrix4f[] matrices(int count) {
+            Matrix4f[] m = new Matrix4f[count];
+            for (int i = 0; i < count; i++) m[i] = new Matrix4f();
+            return m;
+        }
+    }
+
+    /** Which bones each rigged model uses as a ragdoll (an empty Optional if it can't be one). */
+    private final Map<Rig, java.util.Optional<RagdollPose>> ragdollBones = new IdentityHashMap<>();
+
+    private RagdollPose ragdollBones(Rig rig) {
+        return ragdollBones.computeIfAbsent(rig, r -> java.util.Optional.ofNullable(RagdollPose.of(r))).orElse(null);
+    }
+
+    private final Map<Entity, Posed> posed = new IdentityHashMap<>();
+
+    /**
+     * Poses the model as the Animator says (blending two animations while it fades between them),
+     * or, while its Ragdoll is limp, so its bones follow the simulated ones: works out its joint
+     * matrices (poseCharacters then moves the vertices).
+     */
+    private Posed posedMeshes(Entity entity, Animator animator, Ragdoll ragdoll, Model shape, Matrix4f toWorld) {
+        Rig rig = shape.rig;
+        if (animator != null && animator.available().isEmpty() && !rig.clips.isEmpty()) {
+            Map<String, Double> lengths = new LinkedHashMap<>();
+            for (Rig.Clip clip : rig.clips) lengths.put(clip.name(), (double) clip.duration());
+            animator.setClips(rig.clipNames(), lengths);
+        }
+        Posed instance = posed.get(entity);
+        if (instance == null || instance.model != shape) {
+            if (instance != null) instance.close();
+            instance = new Posed(shape, gpu);
+            posed.put(entity, instance);
+        }
+        instance.usedAt = renderCount;
+
+        RagdollPose bones = ragdoll == null ? null : ragdollBones(rig);
+        if (bones != null && ragdoll.active && ragdoll.points != null && instance.posedBefore) {
+            if (ragdoll.fall != instance.fall) {
+                // a new fall: start from the pose it was in (the one the physics started from)
+                instance.fall = ragdoll.fall;
+                for (int i = 0; i < instance.lastNodes.length; i++) instance.limpStart[i].set(instance.lastNodes[i]);
+                for (Quaternionf turn : instance.groupTurns) turn.identity();
+            }
+            bones.apply(instance.limpStart, ragdoll.points, toWorld.invert(new Matrix4f()), instance.groupTurns, instance.nodes);
+            instance.limp = true;
+            rig.skin(instance.nodes, instance.joints);
+        } else {
+            Matrix4f[] nodes = animate(rig, animator);
+            if (instance.limp) {
+                // just got up: blend from the limp pose into the animation
+                instance.limp = false;
+                instance.gettingUp = true;
+                instance.gotUpAt = System.nanoTime();
+                for (int i = 0; i < nodes.length; i++) toWorld.mul(instance.nodes[i], instance.limpWorld[i]);
+            }
+            double blendOut = ragdoll == null ? 0 : ragdoll.blendOut;
+            double sinceUp = (System.nanoTime() - instance.gotUpAt) / 1e9;
+            if (instance.gettingUp && sinceUp >= blendOut) instance.gettingUp = false;
+            if (instance.gettingUp) {
+                blendFromLimp(instance, nodes, toWorld.invert(new Matrix4f()), (float) Easing.apply("inOutQuad", sinceUp / blendOut));
+                nodes = instance.nodes;
+            }
+            if (bones != null) {
+                if (ragdoll.skeleton == null) ragdoll.skeleton = bones.skeleton;
+                if (ragdoll.pose == null) ragdoll.pose = new double[bones.boneNode.length * 3];
+                bones.capture(nodes, toWorld, ragdoll.pose);
+                ragdoll.poseOrigin.set(entity.transform.position);
+                Vector3f facing = toWorld.transformDirection(new Vector3f(0, 0, 1)).normalize(); // glTF characters face +Z
+                ragdoll.poseForward.set(facing.x, facing.y, facing.z);
+                for (int i = 0; i < nodes.length; i++) instance.lastNodes[i].set(nodes[i]);
+                instance.posedBefore = true;
+            }
+            rig.skin(nodes, instance.joints);
+        }
+        return instance;
+    }
+
+    /** One skinned part of one character, to be moved to its pose. */
+    private record SkinJob(ModelData.Skin skin, Matrix4f[] joints, float[] vertices) { }
+
+    /**
+     * Poses every animated character (one after another: models share their working space),
+     * then moves all their vertices at once on every CPU core (the slow part with a crowd),
+     * then hands the new vertices to the GPU.
+     */
+    private Map<Entity, Posed> poseCharacters(Scene scene) {
+        Map<Entity, Posed> animated = new IdentityHashMap<>();
+        List<SkinJob> jobs = new ArrayList<>();
+        Matrix4f toWorld = new Matrix4f();
+        for (Entity entity : scene.entities()) {
+            MeshRenderer renderer = entity.get(MeshRenderer.class);
+            if (!entity.active || renderer == null) continue;
+            Animator animator = entity.get(Animator.class);
+            Ragdoll ragdoll = entity.get(Ragdoll.class);
+            if (animator == null && ragdoll == null) continue;
+            Model shape = model(renderer.mesh);
+            if (shape.rig == null) continue;
+            entity.transform.matrix(toWorld).rotateY((float) Math.toRadians(renderer.turn));
+            Posed instance = posedMeshes(entity, animator, ragdoll, shape, new Matrix4f(toWorld));
+            animated.put(entity, instance);
+            for (int i = 0; i < shape.parts.size(); i++) {
+                if (instance.meshes.get(i) != null) jobs.add(new SkinJob(shape.parts.get(i).source().skin(), instance.joints, instance.vertices.get(i)));
+            }
+        }
+        if (jobs.size() > 1) jobs.parallelStream().forEach(job -> Skinning.apply(job.skin(), job.joints(), job.vertices()));
+        else jobs.forEach(job -> Skinning.apply(job.skin(), job.joints(), job.vertices()));
+        for (Posed instance : animated.values()) {
+            for (int i = 0; i < instance.meshes.size(); i++) {
+                if (instance.meshes.get(i) != null) gpu.updateMesh(instance.meshes.get(i), instance.vertices.get(i));
+            }
+        }
+        return animated;
+    }
+
+    /** Every node of the model, posed as the Animator says (the rest pose without one). */
+    private static Matrix4f[] animate(Rig rig, Animator animator) {
+        if (animator == null) {
+            rig.poseNodes(null, 0, null, 0, 0);
+            return rig.nodes();
+        }
+        Rig.Clip current = rig.clip(animator.current());
+        Rig.Clip previous = animator.previous() == null ? null : rig.clip(animator.previous());
+        if (previous != null) {
+            rig.poseNodes(previous, (float) animator.previousTime(), current, (float) animator.time(), (float) animator.blend());
+        } else {
+            rig.poseNodes(current, (float) animator.time(), null, 0, 0);
+        }
+        return rig.nodes();
+    }
+
+    /** Mixes the last limp pose with the animated one into instance.nodes: 0 = limp, 1 = animated. */
+    private static void blendFromLimp(Posed instance, Matrix4f[] animated, Matrix4f worldToModel, float amount) {
+        Vector3f limpAt = new Vector3f(), animAt = new Vector3f(), scale = new Vector3f();
+        Quaternionf limpTurn = new Quaternionf(), animTurn = new Quaternionf();
+        Matrix4f limp = new Matrix4f();
+        for (int i = 0; i < animated.length; i++) {
+            worldToModel.mul(instance.limpWorld[i], limp);
+            limp.getTranslation(limpAt);
+            limp.getNormalizedRotation(limpTurn);
+            animated[i].getTranslation(animAt);
+            animated[i].getNormalizedRotation(animTurn);
+            animated[i].getScale(scale);
+            instance.nodes[i].translationRotateScale(limpAt.lerp(animAt, amount), limpTurn.slerp(animTurn, amount), scale);
+        }
+    }
+
+    /** Frees the posed meshes of entities that are gone (deleted, or from a finished Play session). */
+    private void forgetUnusedPoses() {
+        posed.entrySet().removeIf(entry -> {
+            boolean stale = renderCount - entry.getValue().usedAt > 120;
+            if (stale) entry.getValue().close();
+            return stale;
+        });
     }
 
     private static Color multiply(Color a, Color b) {
@@ -258,6 +482,7 @@ public final class SceneRenderer implements AutoCloseable {
     /** Frees meshes of tilemaps that are gone (deleted, or from a finished Play session). */
     private void forgetUnusedTilemaps() {
         renderCount++;
+        forgetUnusedPoses();
         tileMeshes.entrySet().removeIf(entry -> {
             boolean stale = renderCount - entry.getValue().usedAt() > 120;
             if (stale) entry.getValue().mesh().close();
@@ -343,6 +568,7 @@ public final class SceneRenderer implements AutoCloseable {
         MeshRenderer meshRenderer = entity.get(MeshRenderer.class);
         if (meshRenderer != null) {
             Model shape = model(meshRenderer.mesh);
+            matrix.rotateY((float) Math.toRadians(meshRenderer.turn));
             return new Bounds(matrix, new Vector3f(shape.boundsMin), new Vector3f(shape.boundsMax));
         }
         SpriteRenderer spriteRenderer = entity.get(SpriteRenderer.class);
@@ -392,16 +618,70 @@ public final class SceneRenderer implements AutoCloseable {
         gpu.drawLines(wireCube, model, Theme.ACCENT, 1, 1e6f, 2e6f, true);
     }
 
-    /** Every Box Collider as a wire box: green for solid ones, yellow for triggers. */
+    /** Every collider as wire lines: green for solid ones, yellow for triggers. */
     private void drawColliders(Scene scene) {
         for (Entity entity : scene.entities()) {
-            BoxCollider collider = entity.get(BoxCollider.class);
-            if (!entity.active || collider == null) continue;
-            entity.transform.matrix(model)
-                    .translate((float) collider.offset.x, (float) collider.offset.y, (float) collider.offset.z)
-                    .scale((float) collider.size.x, (float) collider.size.y, (float) collider.size.z);
-            gpu.drawLines(wireCube, model, collider.trigger ? TRIGGER_COLOR : Theme.SUCCESS, 1, 1e6f, 2e6f, false);
+            if (!entity.active) continue;
+            BoxCollider box = entity.get(BoxCollider.class);
+            if (box != null) {
+                entity.transform.matrix(model)
+                        .translate((float) box.offset.x, (float) box.offset.y, (float) box.offset.z)
+                        .scale((float) box.size.x, (float) box.size.y, (float) box.size.z);
+                gpu.drawLines(wireCube, model, box.trigger ? TRIGGER_COLOR : Theme.SUCCESS, 1, 1e6f, 2e6f, false);
+            }
+            SphereCollider sphere = entity.get(SphereCollider.class);
+            if (sphere != null) {
+                Vector3f center = colliderCenter(entity, sphere.offset);
+                Vec3 s = entity.transform.scale;
+                float diameter = (float) (sphere.radius * 2 * Math.max(Math.abs(s.x), Math.max(Math.abs(s.y), Math.abs(s.z))));
+                model.identity().translate(center).mul(rotationOf(entity)).scale(diameter);
+                gpu.drawLines(wireSphere, model, sphere.trigger ? TRIGGER_COLOR : Theme.SUCCESS, 1, 1e6f, 2e6f, false);
+            }
+            CapsuleCollider capsule = entity.get(CapsuleCollider.class);
+            if (capsule != null) drawCapsule(entity, capsule);
         }
+    }
+
+    /** A capsule outline: a ball at each end, joined by four lines. */
+    private void drawCapsule(Entity entity, CapsuleCollider capsule) {
+        Vec3 s = entity.transform.scale;
+        float radius = (float) (capsule.radius * Math.max(Math.abs(s.x), Math.abs(s.z)));
+        float half = (float) Math.max(0, capsule.height * Math.abs(s.y) / 2 - radius);
+        Vector3f center = colliderCenter(entity, capsule.offset);
+        Matrix4f rotation = rotationOf(entity);
+        Vector3f up = rotation.transformDirection(new Vector3f(0, half, 0));
+        Color color = capsule.trigger ? TRIGGER_COLOR : Theme.SUCCESS;
+        for (int end = -1; end <= 1; end += 2) {
+            model.identity().translate(new Vector3f(up).mul(end).add(center)).mul(rotation).scale(radius * 2);
+            gpu.drawLines(wireSphere, model, color, 1, 1e6f, 2e6f, false);
+        }
+        model.identity().translate(center).mul(rotation).scale(radius * 2, half * 2, radius * 2);
+        gpu.drawLines(wireCapsuleSides, model, color, 1, 1e6f, 2e6f, false);
+    }
+
+    /** What a selected NPC notices: its view (purple wedge) and how far it hears (faint circle). */
+    private void drawSenses(Entity entity, Npc npc) {
+        Vec3 p = entity.transform.position;
+        int angle = (int) Math.max(1, Math.min(360, Math.round(npc.sightAngle)));
+        float range = (float) npc.sightRange;
+        model.identity().translate((float) p.x, (float) p.y, (float) p.z)
+                .rotateY((float) Math.toRadians(entity.transform.rotation.y)).scale(range, 1, range);
+        gpu.drawLines(fan(angle), model, Theme.ACCENT, 1, 1e6f, 2e6f, false);
+        float hearing = (float) npc.hearing;
+        model.identity().translate((float) p.x, (float) p.y, (float) p.z).scale(hearing, 1, hearing);
+        gpu.drawLines(fan(360), model, Theme.TEXT_MUTED, 0.5f, 1e6f, 2e6f, false);
+    }
+
+    private GpuMesh fan(int degrees) {
+        return fans.computeIfAbsent(degrees, d -> gpu.mesh(MeshData.wireFan(d)));
+    }
+
+    private static Vector3f colliderCenter(Entity entity, Vec3 offset) {
+        return entity.transform.matrix(new Matrix4f()).transformPosition(new Vector3f((float) offset.x, (float) offset.y, (float) offset.z));
+    }
+
+    private static Matrix4f rotationOf(Entity entity) {
+        return entity.transform.matrixWithoutScale(new Matrix4f()).setTranslation(0, 0, 0);
     }
 
     @Override
@@ -410,8 +690,13 @@ public final class SceneRenderer implements AutoCloseable {
         quad.close();
         grid.close();
         wireCube.close();
+        wireSphere.close();
+        wireCapsuleSides.close();
+        fans.values().forEach(GpuMesh::close);
+        hudPainter.close();
         softDot.close();
         tileMeshes.values().forEach(t -> t.mesh().close());
+        posed.values().forEach(Posed::close);
         assets.close();
         gpu.close();
     }

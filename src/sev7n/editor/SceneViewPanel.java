@@ -97,7 +97,7 @@ final class SceneViewPanel {
         framebuffer.resize((int) width, (int) height, ctx.graphics.antiAliasing, false);
         framebuffer.bind();
         EditorSettings prefs = ctx.editorSettings;
-        ctx.renderer.render(ctx.scene(), view, Theme.EDITOR, new SceneRenderer.Overlays(prefs.showGrid, ctx.selected(), prefs.showColliders));
+        ctx.renderer.render(ctx.scene(), view, Theme.EDITOR, new SceneRenderer.Overlays(prefs.showGrid, ctx.selected(), prefs.showColliders, false));
         framebuffer.end();
 
         ImGui.image(framebuffer.texture(), width, height, 0, 1, 1, 0); // GL textures are upside down

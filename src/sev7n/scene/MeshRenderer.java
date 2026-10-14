@@ -17,6 +17,11 @@ public final class MeshRenderer extends Component {
     public Color color = new Color(0xBF9EEE);
     /** A picture wrapped around the mesh, e.g. "assets/textures/brick.png", or "" for none. */
     public String texture = "";
+    /**
+     * Turns the model inside its object, in degrees around Y. Models made facing +Z (most
+     * .glb / .gltf characters) need 180 to face the object's forward, the way NPCs walk.
+     */
+    public double turn = 0;
 
     /** True for built-in shapes, false for imported model files. */
     public static boolean isBuiltIn(String mesh) {
@@ -38,6 +43,7 @@ public final class MeshRenderer extends Component {
         out.put("mesh", mesh);
         out.put("color", Json.color(color));
         if (!texture.isEmpty()) out.put("texture", texture);
+        if (turn != 0) out.put("turn", turn);
     }
 
     @Override
@@ -45,5 +51,6 @@ public final class MeshRenderer extends Component {
         mesh = Json.string(in, "mesh", mesh);
         color = Json.color(in, "color", color);
         texture = Json.string(in, "texture", texture);
+        turn = Json.number(in, "turn", 0);
     }
 }

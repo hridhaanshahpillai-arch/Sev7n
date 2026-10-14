@@ -3,9 +3,9 @@
 A 2D and 3D game engine written in Java, with a Unity-style editor, its own scripting language
 (**Seven**) and a visual scripting system (**Eights**).
 
-> **Status: 0.5 alpha.** Expect things to change.
+> **Status: 0.6 alpha.** Expect things to change.
 
-**Download (Windows):** get `Sev7n-0.5-alpha-windows.zip` from the **Releases** page, unzip it anywhere,
+**Download (Windows):** get `Sev7n-0.6-alpha-windows.zip` from the **Releases** page, unzip it anywhere,
 and double-click **Sev7n.exe**. Java is included, so there's nothing else to install.
 
 You build scenes in the editor, then attach **behaviours** to objects, written in Seven code or
@@ -28,7 +28,20 @@ behaviour PlayerMove {
 }
 ```
 
-## What's in 0.5
+## What's in 0.6
+
+- **HUD** (new): on-screen text, boxes, bars and pictures from scripts (`text("Score: " + points, 24, 20)`,
+  `bar(...)` for health), the same in every window size, with OpenGL and Vulkan
+- **Game UI** (new): buttons, sliders, checkboxes and rounded panels that react to the mouse, title
+  screens and pause menus that freeze the world (`setTimeScale(0)`), `restart()`, `quit()`, `lateUpdate()`
+- **UI in the world** (new): holographic panels floating in 3D (`beginWorld`), prompts and lock-on
+  brackets that follow things (`worldToScreen`), glowing visor-style drawing, radars, rings, lines,
+  segmented bars and key icons
+- **Sound** (new): `playSound("assets/sounds/hit.wav")`, looping music with `playMusic()` (.wav files)
+- **Example**: the ragdoll playground now has a holographic inventory (Tab), a visor HUD with radar and
+  lock-on, prompts pinned to zombies, a title screen, a pause menu (Esc), a health bar, a knockdown counter, sounds and a slide (C)
+
+## Also in 0.5 and since
 
 - **2D games** (new): flat orthographic cameras that can switch to 3D at any time, a 2D Scene view,
   sprite sheets with frames, flipping and draw order, a **Sprite Animator**, and **tilemaps**
@@ -40,8 +53,21 @@ behaviour PlayerMove {
   grids or automatic detection; move, resize, reorder, trim, set pivots, preview the animation
 - **Settings** (new, click the 7): **OpenGL or Vulkan**, Lit / Flat / Toon / Wireframe shading, render scale,
   anti-aliasing, pixel textures, fog and render distance, brightness, frame rate limits and VSync
-- **Particle effects** (new): right-click → New Effect for fire, smoke, sparks, magic, explosions, rain, snow or
-  confetti; tweak them live in the Scene view; `spawnEffect("Explosion", position)` from scripts
+- **Animated 3D models** (new): characters from `.glb` / `.gltf` walk, run and fight with their own animations
+  (Mesh Renderer **Model turn** fixes ones that face backwards),
+  blending smoothly between them (`entity.play("Run")`); **tweens** move, spin, scale or fade anything in one line
+- **Ragdolls** (new): characters go limp and tumble like real bodies (`entity.ragdoll(push)`), then get back
+  up (`entity.getUp()`), blending into a get-up animation. Works with any humanoid rig
+- **Example**: `projects/MyGame` is a ragdoll playground: walk with WASD, C to slide, R to go limp, F to punch zombies
+- **NPCs and AI** (new): Create → NPC for characters that find their way around walls, see (blocked by walls)
+  and hear (`makeNoise()`), chase, flee or watch, search where they last saw you, wander, patrol, follow
+  a daily routine on the game clock, and remember who did what (`entity.remember(player, "helped", 20)`)
+- **Physics** (expanded): sphere and capsule colliders, mass and pushing, friction, forces and impulses,
+  kinematic bodies, locked axes, `raycast()` and `overlapSphere()`
+- **Math** (expanded): easing curves, smooth noise, remap/smoothstep/moveTowards, angle helpers, vector rotate/reflect/lerp and more
+- **Particle effects** (new): right-click → New Effect for fire, smoke, sparks, magic, explosions, fountains,
+  debris, rain, snow or confetti. Cone, sphere, box, circle and line shapes; dots, pictures or 3D models;
+  spinning, bouncing off colliders; tweak them live in the Scene view; `spawnEffect("Explosion", position)` from scripts
 - **Vulkan** (new): games can draw with Vulkan instead of OpenGL (same look), falling back to OpenGL on PCs
   that can't run it. **File → Play in Window** (Ctrl+F5) shows your game exactly as players will see it
 - **Live Mode** (new, the LIVE button next to Play): edit your game while it plays. Changes are kept when you stop,
@@ -59,7 +85,7 @@ behaviour PlayerMove {
 - **Play mode**: runs on a copy of the scene, so Stop puts everything back (like Unity), unless Live Mode is on
 - **Built-in code editor** with Dracula Soft colors, auto-indent, undo, Ctrl+/ comments
 - **Components**: Transform, Mesh Renderer, Sprite Renderer, Sprite Animator, Tilemap, Camera,
-  Directional Light, Box Collider, Rigidbody, Particle Effect, Behaviour
+  Directional Light, Box / Sphere / Capsule Collider, Rigidbody, Animator, Particle Effect, NPC, Ragdoll, Behaviour
 - **Scenes saved as readable JSON**, scripts as plain `.7n` files, graphs as `.8s` files
 
 ## Running it from the source code
@@ -114,6 +140,10 @@ In the editor, press **F1** (or **Help → Guides**) to read these guides with s
 - [docs/ASSETS.md](docs/ASSETS.md): importing pictures, models and packs
 - [docs/2D.md](docs/2D.md): 2D cameras, sprites, sprite animation and tilemaps
 - [docs/PHYSICS.md](docs/PHYSICS.md): Rigidbodies, colliders and triggers
+- [docs/ANIMATION.md](docs/ANIMATION.md): animated 3D models and tweens
+- [docs/HUD.md](docs/HUD.md): on-screen text, health bars, buttons and menus, sound
+- [docs/RAGDOLLS.md](docs/RAGDOLLS.md): ragdolls, and the example playground
+- [docs/NPC.md](docs/NPC.md): NPCs: pathfinding, senses, memory and routines
 - [docs/EFFECTS.md](docs/EFFECTS.md): particle effects
 - [docs/EXPORT.md](docs/EXPORT.md): turning your project into a game others can play
 - [docs/SETTINGS.md](docs/SETTINGS.md): graphics (OpenGL / Vulkan), frame rate, editor settings and Live Mode
@@ -149,11 +179,12 @@ and checksum-verified by `get-libs.ps1`.
 
 ## Roadmap ideas
 
-- On-screen text and HUD (score, health bars, menus)
-- Sound playback
+- UI: text boxes for typing, scrolling lists, gamepad menus
+- Sound in 3D (quieter far away) and echo shaped by the room (acoustics)
 - More model formats (.fbx without Blender)
 - Eights: comment boxes, custom functions, more nodes
-- Physics: slopes, rotating bodies
+- Physics: rotating bodies, joints, active ragdolls (muscles that keep balance), weight and momentum for characters
+- Animation: morph targets (faces), animation events
 - Parent/child objects in the Hierarchy
 - Undo/redo for scene edits
 - Multiple scenes, prefabs

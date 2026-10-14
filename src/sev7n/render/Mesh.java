@@ -24,6 +24,11 @@ public final class Mesh implements GpuMesh {
     private final Vector3f boundsMax;
 
     public Mesh(MeshData data) {
+        this(data, false);
+    }
+
+    /** @param dynamic the vertices will be replaced often (see update) */
+    public Mesh(MeshData data, boolean dynamic) {
         this.indexCount = data.indices().length;
         this.drawMode = data.lines() ? GL_LINES : GL_TRIANGLES;
         this.boundsMin = data.boundsMin();
@@ -34,7 +39,7 @@ public final class Mesh implements GpuMesh {
 
         vbo = glGenBuffers();
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, data.vertices(), GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, data.vertices(), dynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
 
         ebo = glGenBuffers();
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
@@ -59,6 +64,13 @@ public final class Mesh implements GpuMesh {
     @Override
     public Vector3f boundsMax() {
         return boundsMax;
+    }
+
+    /** Replaces the vertices (same number as before). */
+    public void update(float[] vertices) {
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, vertices);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
     public void draw() {

@@ -165,7 +165,7 @@ final class HierarchyPanel {
 
     private void createItems() {
         for (String kind : EditorContext.CREATABLE) {
-            if (kind.equals("Sprite") || kind.equals("Camera")) ImGui.separator();
+            if (kind.equals("Sprite") || kind.equals("Camera") || kind.equals("NPC")) ImGui.separator();
             if (ImGui.menuItem(kind)) ctx.create(kind);
         }
         ImGui.separator();

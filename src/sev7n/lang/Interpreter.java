@@ -144,6 +144,14 @@ public class Interpreter {
         return invoke(method, argList, 0);
     }
 
+    /** Calls a function value from a script (e.g. a callback). Extra arguments are dropped, like callMethod. */
+    public Object callFunction(SevenCallable function, Object... args) {
+        List<Object> argList = new ArrayList<>(List.of(args));
+        if (function.maxArgs() >= 0 && argList.size() > function.maxArgs()) argList = argList.subList(0, function.maxArgs());
+        steps = 0;
+        return invoke(function, argList, 0);
+    }
+
     public Object lookupGlobal(String name) {
         return globals.lookup(name);
     }
@@ -319,7 +327,8 @@ public class Interpreter {
             case PLUS, MINUS, STAR, SLASH -> true;
             default -> false;
         };
-        if (arithmetic && (left instanceof Vec3 || right instanceof Vec3)) {
+        boolean joiningText = op.type() == TokenType.PLUS && (left instanceof String || right instanceof String);
+        if (arithmetic && !joiningText && (left instanceof Vec3 || right instanceof Vec3)) {
             return vectorMath(left, right, op);
         }
 

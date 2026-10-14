@@ -6,11 +6,13 @@ import sev7n.lang.runtime.SevenObject;
 import sev7n.lang.runtime.Style;
 import sev7n.lang.runtime.Values;
 import sev7n.math.Vec3;
+import sev7n.scene.Animator;
 import sev7n.scene.Camera;
 import sev7n.scene.Component;
 import sev7n.scene.Entity;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.ParticleEmitter;
+import sev7n.scene.Ragdoll;
 import sev7n.scene.Rigidbody;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
@@ -26,9 +28,16 @@ import java.util.List;
  *   entity.color  entity.mesh  entity.texture  entity.style = someStyle
  *   entity.hasTag(t)  entity.addTag(t)  entity.removeTag(t)  entity.destroy()
  *   entity.addBehaviour("Name")  entity.behaviour("Name")
- *   physics:   entity.velocity  entity.grounded  entity.push(v)
+ *   physics:   entity.velocity  entity.grounded  entity.push(v)  entity.addForce(v)  entity.addImpulse(v)
+ *              entity.mass  entity.kinematic
  *   sprites:   entity.frame  entity.flipX  entity.flipY  entity.play("run")  entity.animation  entity.animationDone
+ *   models:    entity.play("Walk", [fade])  entity.animation  entity.animationDone  entity.animationSpeed  entity.animations
+ *   ragdolls:  entity.ragdoll([push])  entity.getUp()  entity.ragdolling
  *   effects:   entity.emit(n)  entity.playEffect()  entity.stopEffect()  entity.effectDone
+ *   NPCs:      entity.moveTo(place)  entity.follow(e)  entity.chase(e)  entity.flee(e)  entity.stay()  entity.resume()
+ *              entity.state  entity.activity  entity.target  entity.arrived  entity.canSee(e)  entity.seen
+ *              entity.remember(e, "event", [opinion])  entity.remembers(e, "event")  entity.opinion(e)  entity.setOpinion(e, n)
+ *              entity.knows(e)  entity.lastSeen(e)  entity.forget(e)
  *   others:    entity.camera  entity.tile(x, y)  entity.setTile(x, y, tile)
  *
  * There is one proxy per entity, so 'other == player' works.
@@ -76,16 +85,49 @@ final class EntityProxy implements SevenObject {
                 requireBody(args.line()).velocity.set(requireBody(args.line()).velocity.plus(args.vec3(0)));
                 return null;
             });
+            // a steady push (call it every frame, like an engine), and a sudden one (a kick or explosion); heavier things move less
+            case "addForce" -> new NativeFunction(name, 1, 1, args -> {
+                Rigidbody body = requireBody(args.line());
+                body.force.set(body.force.plus(args.vec3(0)));
+                return null;
+            });
+            case "addImpulse" -> new NativeFunction(name, 1, 1, args -> {
+                Rigidbody body = requireBody(args.line());
+                body.velocity.set(body.velocity.plus(args.vec3(0).times(body.inverseMass())));
+                return null;
+            });
+            case "mass" -> requireBody(line).mass;
+            case "kinematic" -> requireBody(line).kinematic;
             // sprites & animation
             case "frame" -> (double) requireSprite(line).frame;
             case "flipX" -> requireSprite(line).flipX;
             case "flipY" -> requireSprite(line).flipY;
-            case "play" -> new NativeFunction(name, 1, 1, args -> {
-                play(args.string(0), args.line());
+            // play("Run") or play("Run", 0.1): a 3D model's animation (with an Animator) or sprite frames (a Sprite Animator)
+            case "play" -> new NativeFunction(name, 1, 2, args -> {
+                play(args.string(0), args.has(1) ? args.number(1) : -1, args.line());
                 return null;
             });
-            case "animation" -> requireAnimator(line).current();
-            case "animationDone" -> requireAnimator(line).finished();
+            case "animation" -> entity.has(Animator.class) ? entity.get(Animator.class).current() : requireAnimator(line).current();
+            case "animationDone" -> entity.has(Animator.class) ? entity.get(Animator.class).done() : requireAnimator(line).finished();
+            case "animationSpeed" -> requireModelAnimator(line).speed;
+            case "animations" -> new ArrayList<Object>(requireModelAnimator(line).available());
+            // ragdolls: go limp (optionally knocked by a push), and stand back up
+            case "ragdoll" -> new NativeFunction(name, 0, 1, args -> {
+                Ragdoll ragdoll = requireRagdoll(args.line());
+                if (!ragdoll.active && args.has(0)) {
+                    Vec3 push = args.vec3(0);
+                    ragdoll.pushX = push.x;
+                    ragdoll.pushY = push.y;
+                    ragdoll.pushZ = push.z;
+                }
+                ragdoll.active = true;
+                return null;
+            });
+            case "getUp" -> new NativeFunction(name, 0, 0, args -> {
+                requireRagdoll(args.line()).active = false;
+                return null;
+            });
+            case "ragdolling" -> requireRagdoll(line).active;
             // particle effects
             case "emit" -> new NativeFunction(name, 1, 1, args -> {
                 requireEmitter(args.line()).emit(args.integer(0), entity.transform);
@@ -100,6 +142,58 @@ final class EntityProxy implements SevenObject {
                 return null;
             });
             case "effectDone" -> requireEmitter(line).done();
+            // NPCs
+            case "moveTo" -> new NativeFunction(name, 1, 1, args -> {
+                if (args.get(0) instanceof EntityProxy other) requireBrain(args.line()).moveTo(other.entity());
+                else requireBrain(args.line()).moveTo(args.vec3(0));
+                return null;
+            });
+            case "follow" -> order(name, NpcBrain::follow);
+            case "chase" -> order(name, NpcBrain::chase);
+            case "flee" -> order(name, NpcBrain::flee);
+            case "stay" -> new NativeFunction(name, 0, 0, args -> {
+                requireBrain(args.line()).stay();
+                return null;
+            });
+            case "resume" -> new NativeFunction(name, 0, 0, args -> {
+                requireBrain(args.line()).resume();
+                return null;
+            });
+            case "state" -> requireBrain(line).state();
+            case "activity" -> requireBrain(line).activity();
+            case "target" -> requireBrain(line).focus() == null ? null : game.proxy(requireBrain(line).focus());
+            case "arrived" -> requireBrain(line).arrived();
+            case "seen" -> {
+                List<Object> seen = new ArrayList<>();
+                for (Entity e : requireBrain(line).visible) seen.add(game.proxy(e));
+                yield seen;
+            }
+            case "canSee" -> new NativeFunction(name, 1, 1, args -> requireBrain(args.line()).canSee(game.scene(), other(args, 0)));
+            case "remember" -> new NativeFunction(name, 2, 3, args -> {
+                requireBrain(args.line()).remember(other(args, 0), args.string(1), args.has(2) ? args.number(2) : 0);
+                return null;
+            });
+            case "remembers" -> new NativeFunction(name, 2, 2, args -> {
+                NpcBrain.Memory memory = requireBrain(args.line()).memories.get(other(args, 0));
+                return memory == null ? 0.0 : memory.events.getOrDefault(args.string(1), 0.0);
+            });
+            case "opinion" -> new NativeFunction(name, 1, 1, args -> {
+                NpcBrain.Memory memory = requireBrain(args.line()).memories.get(other(args, 0));
+                return memory == null ? 0.0 : memory.opinion;
+            });
+            case "setOpinion" -> new NativeFunction(name, 2, 2, args -> {
+                requireBrain(args.line()).memoryOf(other(args, 0)).opinion = Math.max(-100, Math.min(100, args.number(1)));
+                return null;
+            });
+            case "knows" -> new NativeFunction(name, 1, 1, args -> requireBrain(args.line()).memories.containsKey(other(args, 0)));
+            case "lastSeen" -> new NativeFunction(name, 1, 1, args -> {
+                NpcBrain.Memory memory = requireBrain(args.line()).memories.get(other(args, 0));
+                return memory == null || memory.lastSeen == null ? null : memory.lastSeen.copy();
+            });
+            case "forget" -> new NativeFunction(name, 1, 1, args -> {
+                requireBrain(args.line()).forget(other(args, 0));
+                return null;
+            });
             // camera & tilemap
             case "camera" -> entity.get(Camera.class) == null ? null : new CameraProxy(entity.get(Camera.class));
             case "tile" -> new NativeFunction(name, 2, 2, args -> {
@@ -139,7 +233,10 @@ final class EntityProxy implements SevenObject {
             case "texture" -> setTexture(value == null ? "" : requireType(value, String.class, name, line), line);
             case "style" -> applyStyle(requireType(value, Style.class, name, line), line);
             case "velocity" -> requireBody(line).velocity.set(requireType(value, Vec3.class, name, line));
+            case "mass" -> requireBody(line).mass = Math.max(0.001, requireType(value, Double.class, name, line));
+            case "kinematic" -> requireBody(line).kinematic = Values.isTruthy(value);
             case "frame" -> requireSprite(line).frame = requireType(value, Double.class, name, line).intValue();
+            case "animationSpeed" -> requireModelAnimator(line).speed = requireType(value, Double.class, name, line);
             case "flipX" -> requireSprite(line).flipX = Values.isTruthy(value);
             case "flipY" -> requireSprite(line).flipY = Values.isTruthy(value);
             default -> throw new SevenError("entity." + name + " can't be changed", line);
@@ -166,12 +263,38 @@ final class EntityProxy implements SevenObject {
         else requireRenderer(line).texture = path;
     }
 
-    private void play(String clip, int line) {
+    private void play(String clip, double fade, int line) {
+        Animator model = entity.get(Animator.class);
+        if (model != null) {
+            boolean found = fade >= 0 ? model.play(clip, fade) : model.play(clip);
+            if (!found) throw new SevenError("'" + entity.name + "' has no animation called '" + clip + "' (it has " + model.available() + ")", line);
+            NpcBrain brain = game.brain(entity);
+            if (brain != null) brain.hold(clip); // an NPC doesn't switch back to walking until it's done
+            return;
+        }
         SpriteAnimator animator = requireAnimator(line);
         if (!animator.play(clip)) {
             List<String> names = animator.clips.stream().map(c -> c.name).toList();
             throw new SevenError("'" + entity.name + "' has no animation called '" + clip + "' (it has " + names + ")", line);
         }
+    }
+
+    private NativeFunction order(String name, java.util.function.BiConsumer<NpcBrain, Entity> give) {
+        return new NativeFunction(name, 1, 1, args -> {
+            give.accept(requireBrain(args.line()), other(args, 0));
+            return null;
+        });
+    }
+
+    private static Entity other(sev7n.lang.runtime.Args args, int index) {
+        if (args.get(index) instanceof EntityProxy proxy) return proxy.entity();
+        throw args.error("expected an entity, not " + Values.typeName(args.get(index)));
+    }
+
+    private NpcBrain requireBrain(int line) {
+        NpcBrain brain = game.brain(entity);
+        if (brain == null) throw new SevenError("'" + entity.name + "' has no NPC. Add an NPC to it in the Inspector", line);
+        return brain;
     }
 
     private Rigidbody requireBody(int line) {
@@ -186,8 +309,16 @@ final class EntityProxy implements SevenObject {
         return require(SpriteAnimator.class, "a Sprite Animator", line);
     }
 
+    private Animator requireModelAnimator(int line) {
+        return require(Animator.class, "an Animator", line);
+    }
+
     private ParticleEmitter requireEmitter(int line) {
         return require(ParticleEmitter.class, "a Particle Effect", line);
+    }
+
+    private Ragdoll requireRagdoll(int line) {
+        return require(Ragdoll.class, "a Ragdoll", line);
     }
 
     private Tilemap requireTilemap(int line) {

@@ -139,7 +139,17 @@ var back = -v
 v.length                    // how long it is
 v.normalized()              // same direction, length 1
 v.dot(w)   v.cross(w)   v.distance(w)   v.copy()
+v.lerp(w, 0.5)              // halfway from v to w
+v.moveTowards(w, 2 * dt)    // a step toward w, never past it
+v.angle(w)                  // degrees between two directions
+v.rotate(up(), 90)          // turned 90 degrees around an axis
+v.reflect(normal)           // bounced off a surface (like a ball off a wall)
+v.project(w)                // the part of v that points along w
+v.clampLength(5)            // at most 5 long (a speed limit)
 ```
+
+`vec2(x, y)` is `vec3(x, y, 0)` for 2D games, and `up() down() left() right() forward() back()`
+are handy directions.
 
 Moving is usually "direction × speed × dt":
 
@@ -188,6 +198,12 @@ With the matching component on the object ([2D games](2D.md), [physics](PHYSICS.
 | `velocity`                 | Rigidbody        | how fast it's moving (vec3, changeable)    |
 | `grounded`                 | Rigidbody        | true while standing on something           |
 | `push(v)`                  | Rigidbody        | adds to its velocity                       |
+| `addForce(v)`, `addImpulse(v)` | Rigidbody    | a steady push (every frame) or a sudden kick; heavier things move less |
+| `mass`, `kinematic`        | Rigidbody        | how heavy it is; whether only scripts move it (changeable) |
+| `play("Walk", [fade])`     | Animator         | switch a 3D model's animation, blending over `fade` seconds ([animation](ANIMATION.md)) |
+| `animationSpeed`, `animations` | Animator     | how fast it plays (changeable); the model's animation names |
+| `ragdoll([push])`, `getUp()`, `ragdolling` | Ragdoll | go limp like a real body, stand back up, whether it's limp ([ragdolls](RAGDOLLS.md)) |
+| `moveTo(place)`, `chase(e)`, `flee(e)`, `remember(e, "event", n)`... | NPC | walk around walls, react, remember ([NPCs](NPC.md)) |
 | `flipX`, `flipY`           | Sprite Renderer  | mirror the sprite                          |
 | `frame`                    | Sprite Renderer  | which sprite sheet frame is showing        |
 | `play("run")`              | Sprite Animator  | switch animation                           |
@@ -249,17 +265,45 @@ Meshes: `cube`, `sphere`, `plane`, `cylinder`, or an imported model like `"asset
 
 ### Physics
 
-`gravity()` (a vec3), `setGravity(v)`, `solidAt(point)` (true if a solid collider or tile is there)
+`gravity()` (a vec3), `setGravity(v)`, `solidAt(point)` (true if a solid collider or tile is there),
+`raycast(from, direction, [maxDistance], [ignore])` (the first thing hit, or `none`),
+`overlapSphere(center, radius)` (every entity there). See [physics](PHYSICS.md).
 
-### Time & math
+### Tweens and effects
 
-`time()` (seconds since Play), `abs sqrt sin cos atan2 floor ceil round min max`,
-`clamp(v, lo, hi)`, `lerp(a, b, t)`, `distance(a, b)`,
-`random()` / `random(max)` / `random(min, max)`, `randint(min, max)`, `PI`
+`tween(entity, "position", vec3(0, 3, 0), 1.5, "outBounce", [whenDone])` moves smoothly; also
+`"rotation"`, `"scale"`, `"color"`, `"tint"`, `"size"`. `stopTweens(entity)`. `spawnEffect("Explosion", position)`.
+See [animation](ANIMATION.md) and [particle effects](EFFECTS.md).
+
+### Math
+
+| Function | Gives |
+|----------|-------|
+| `abs sqrt pow exp log sign floor ceil` | the usual; `log(x, base)` too |
+| `round(x)`, `round(x, 2)` | whole number, or 2 decimal places |
+| `sin cos tan asin acos atan atan2` | trigonometry, in radians; `deg(r)` and `rad(d)` convert |
+| `min(...)`, `max(...)`, `sum(...)`, `average(...)` | several numbers, or one list |
+| `clamp(v, lo, hi)` | v kept between lo and hi |
+| `lerp(a, b, t)` | `t` of the way from a to b: numbers, vec3s or colors |
+| `inverseLerp(a, b, v)`, `remap(v, a1, b1, a2, b2)` | where v is between a and b; v moved from one range to another |
+| `smoothstep(a, b, x)` | 0 to 1 as x goes a to b, easing in and out |
+| `moveTowards(current, target, step)` | a step closer, never past it (numbers or vec3s) |
+| `deltaAngle(a, b)`, `lerpAngle(a, b, t)` | the shortest turn between two angles in degrees, and blending angles the short way |
+| `wrap(x, min, max)`, `pingPong(t, length)` | goes round like a clock; goes back and forth |
+| `ease("outBounce", t)` | an easing curve: `linear`, and `in`/`out`/`inOut` + `Sine Quad Cubic Quart Expo Back Elastic Bounce` |
+| `noise(x, [y], [z])` | smooth randomness 0..1 (terrain, flicker, wandering) |
+| `random()`, `random(max)`, `random(min, max)`, `randint(min, max)` | random numbers |
+| `chance(0.25)`, `choose(list)`, `shuffle(list)`, `randomDirection([flat])` | true a quarter of the time; a random item; mixed up; a random direction |
+| `seed(n)` | the same random numbers and noise every run |
+| `distance(a, b)` | between two vec3s (or `x1, y1, x2, y2`) |
+| `PI`, `TAU`, `E`, `INFINITY` | constants |
 
 ### Other
 
-`print(...)` (to the Console), `str(v)`, `num(s)`, `type(v)`, `len(list or string)`, `rgb(r, g, b, [a])`, `vec3(...)`
+`time()` (seconds since Play), `print(...)` (to the Console), `str(v)`, `num(s)`, `type(v)`,
+`len(list or string)`, `rgb(r, g, b, [a])`, `hsv(hue, saturation, brightness, [a])`, `vec3(...)`, `vec2(x, y)`
+
+`"text " + anything` joins them into text: `print("at " + transform.position)`.
 
 ---
 

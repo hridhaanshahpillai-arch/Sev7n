@@ -79,6 +79,7 @@ final class GameViewPanel {
 
         if (ctx.playing()) {
             ImVec2 mouse = ImGui.getMousePos();
+            ctx.input.setViewSize(width, height);
             ctx.input.mouseMoved(mouse.x - origin.x, mouse.y - origin.y);
             ctx.input.mouseButton(focused && hovered && ImGui.isMouseDown(0));
             if (focused) {

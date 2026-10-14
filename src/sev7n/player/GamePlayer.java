@@ -89,6 +89,10 @@ public final class GamePlayer {
             else input.keyEvent(key, action);
         });
         glfwSetCursorPosCallback(window, (w, x, y) -> input.mouseMoved(x, y));
+        glfwSetWindowSizeCallback(window, (w, width, height) -> input.setViewSize(width, height));
+        int[] windowWidth = new int[1], windowHeight = new int[1];
+        glfwGetWindowSize(window, windowWidth, windowHeight);
+        input.setViewSize(windowWidth[0], windowHeight[0]);
         glfwSetMouseButtonCallback(window, (w, button, action, mods) -> {
             if (button == GLFW_MOUSE_BUTTON_LEFT) input.mouseButton(action == GLFW_PRESS);
         });
@@ -110,6 +114,19 @@ public final class GamePlayer {
             double now = glfwGetTime();
             game.update(Math.min(now - last, 0.1));
             last = now;
+            if (game.quitRequested()) break;
+            if (game.restartRequested()) {
+                // scripts asked to start over: a fresh copy of the scene from its file
+                game.stop();
+                try {
+                    game = new Game(project.loadScene(), log, input);
+                } catch (IOException e) {
+                    System.err.println("Couldn't restart: " + e.getMessage());
+                    break;
+                }
+                game.start(project.scriptsFolder());
+                reportedFailure = false;
+            }
 
             // the console lives in the terminal when there's no editor
             for (; printed < log.entries().size(); printed++) System.out.println(log.entries().get(printed).text());
@@ -125,6 +142,7 @@ public final class GamePlayer {
             if (finalFrame) break;
             FrameLimiter.waitForNextFrame(graphics.maxFps, now);
         }
+        game.stop();
 
         screen.close();
         AppWindow.close(window);
