@@ -30,6 +30,10 @@ behaviour PlayerMove {
 
 ## What's in 0.6
 
+- **Sev7n Hub** (new): Sev7n opens on a Hub like Unity Hub: all your projects (search, open, add a folder,
+  show in Explorer, remove from the list), **New project** from a template (3D, 2D, Empty) with its name and
+  location, **Installs** (this version, Vulkan, Blender, export: what works on this PC, and where to get new
+  versions) and **Learn** (the guides). File > Open Hub... goes back to it from the editor
 - **HUD** (new): on-screen text, boxes, bars and pictures from scripts (`text("Score: " + points, 24, 20)`,
   `bar(...)` for health), the same in every window size, with OpenGL and Vulkan
 - **Game UI** (new): buttons, sliders, checkboxes and rounded panels that react to the mouse, title
@@ -96,12 +100,13 @@ Needs **JDK 21+**. Double-click the **Sev7n** shortcut, or:
 run.bat
 ```
 
-`run.bat` builds the first time (downloading libraries into `lib\`), then opens the editor on
-`projects\MyGame`. Other commands:
+`run.bat` builds the first time (downloading libraries into `lib\`), then opens the Sev7n Hub, where
+you pick or make a project. Other commands:
 
 ```bat
 build.bat                                :: rebuild build\sev7n.jar (close Sev7n first)
 powershell -File release.ps1             :: make the download zip in release\ (Sev7n can stay open)
+run.bat projects\MyGame                  :: open a project straight in the editor (no Hub)
 run.bat projects\MyGame\scripts\X.7n     :: open a script in the editor
 run.bat --play projects\MyGame           :: play the game in its own window, no editor
 ```

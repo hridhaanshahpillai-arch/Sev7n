@@ -41,6 +41,7 @@ public final class Theme {
     public static final Color ACCENT_HOVER = new Color(0xD0B8F4);
     public static final Color ERROR = RED;
     public static final Color SUCCESS = GREEN;
+    public static final Color WARNING = YELLOW;
 
     // ---- editor ----
     public static final Color SELECTION = new Color(0x44475A);

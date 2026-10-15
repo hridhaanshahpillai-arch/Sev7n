@@ -11,6 +11,7 @@ import imgui.gl3.ImGuiImplGl3;
 import imgui.glfw.ImGuiImplGlfw;
 import sev7n.Sev7n;
 import sev7n.project.Project;
+import sev7n.project.ProjectList;
 import sev7n.render.AppWindow;
 import sev7n.render.Framebuffer;
 import sev7n.render.FrameLimiter;
@@ -76,6 +77,7 @@ public final class EditorApp implements MainMenu.Actions {
 
     private void start(Path projectFolder, Path scriptToOpen, TestRun test) throws IOException {
         Project project = Project.openOrCreate(projectFolder);
+        if (test == null) ProjectList.load(null).remember(project.root(), Sev7n.VERSION); // for the Hub's list
         window = AppWindow.open(project.name() + "  —  " + Sev7n.NAME, 1600, 900, test == null);
         installInputCallbacks(); // before ImGui, so ImGui chains to ours
         initImGui();
@@ -94,6 +96,21 @@ public final class EditorApp implements MainMenu.Actions {
         ImNodes.destroyContext();
         ImGui.destroyContext();
         AppWindow.close(window);
+        if (openHubAfter) {
+            try {
+                new ProcessBuilder(Sev7n.javaCommand()).start(); // a fresh Sev7n with no project opens the Hub
+            } catch (IOException e) {
+                System.err.println("Couldn't open the Hub: " + e.getMessage());
+            }
+        }
+    }
+
+    private boolean openHubAfter;
+
+    @Override
+    public void openHub() {
+        openHubAfter = true;
+        glfwSetWindowShouldClose(window, true); // asks about unsaved changes first
     }
 
     private Scene loadScene(Project project) {

@@ -2,6 +2,7 @@ package sev7n;
 
 import org.lwjgl.system.Configuration;
 import sev7n.editor.EditorApp;
+import sev7n.editor.HubApp;
 import sev7n.player.GamePlayer;
 import sev7n.project.Project;
 
@@ -14,7 +15,7 @@ import java.util.List;
 /**
  * Sev7n entry point.
  *
- *   sev7n                       open the editor on projects/MyGame
+ *   sev7n                       open the Hub: pick or make a project, then the editor opens on it
  *   sev7n path\to\Project       open the editor on that project folder
  *   sev7n path\to\Script.7n     open the script's project, with the script open (.8s graphs too)
  *   sev7n --play [Project]      play a game in its own window, no editor
@@ -67,7 +68,8 @@ public final class Sev7n {
         } else if (target != null && Files.isDirectory(target)) {
             EditorApp.run(target, null, test);
         } else {
-            EditorApp.run(defaultProject, null, test);
+            Path picked = HubApp.run(test);
+            if (picked != null) EditorApp.run(picked, null, null);
         }
     }
 

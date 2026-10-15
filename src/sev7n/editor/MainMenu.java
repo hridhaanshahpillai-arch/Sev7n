@@ -25,6 +25,9 @@ final class MainMenu {
         void exportGame();
 
         void openSettings();
+
+        /** Closes this project and goes back to the Sev7n Hub. */
+        void openHub();
     }
 
     private final EditorContext ctx;
@@ -47,6 +50,8 @@ final class MainMenu {
             if (ImGui.menuItem("Play in Window", "Ctrl+F5")) ctx.playInWindow();
             if (ImGui.menuItem("Export Game...")) actions.exportGame();
             if (ImGui.menuItem("Show Project Folder")) ProjectPanel.showInExplorer(ctx.project.root());
+            if (ImGui.menuItem("Open Hub...")) actions.openHub();
+            if (ImGui.isItemHovered()) ImGui.setTooltip("Close this project and pick another one (or make a new one) in the Sev7n Hub");
             ImGui.separator();
             if (ImGui.menuItem("Quit")) actions.quit();
             ImGui.endMenu();

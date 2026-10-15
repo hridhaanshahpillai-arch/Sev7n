@@ -3,6 +3,7 @@ package sev7n.editor;
 import java.awt.EventQueue;
 import java.awt.FileDialog;
 import java.awt.Frame;
+import javax.swing.JFileChooser;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -16,6 +17,16 @@ import java.util.function.Consumer;
 final class FilePicker {
 
     private FilePicker() { }
+
+    /** Windows' folder chooser; the folder arrives through 'onChosen' (nothing happens if it's cancelled). */
+    static void chooseFolder(String title, Path startIn, Consumer<Path> onChosen) {
+        EventQueue.invokeLater(() -> {
+            JFileChooser chooser = new JFileChooser(startIn == null ? null : startIn.toFile());
+            chooser.setDialogTitle(title);
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) onChosen.accept(chooser.getSelectedFile().toPath());
+        });
+    }
 
     static void chooseFiles(String title, Consumer<List<Path>> onChosen) {
         EventQueue.invokeLater(() -> {

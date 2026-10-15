@@ -43,11 +43,11 @@ final class GuidePanel {
     static final String TITLE = "Guides";
 
     /** A guide: its title in the sidebar and its file under the Sev7n folder. */
-    private record Guide(String title, Path file) { }
+    record Guide(String title, Path file) { }
 
     private record SearchHit(Guide guide, int block, String section, String snippet) { }
 
-    private static final List<Guide> GUIDES = List.of(
+    static final List<Guide> GUIDES = List.of(
             new Guide("Getting Started", Path.of("README.md")),
             new Guide("Seven Language", Path.of("docs", "SEVEN.md")),
             new Guide("Eights Visual Scripting", Path.of("docs", "EIGHTS.md")),
