@@ -32,6 +32,8 @@ public final class Rigidbody extends Component {
     public boolean lockX = false;
     public boolean lockY = false;
     public boolean lockZ = false;
+    /** A ball (Sphere Collider) turns as it rolls along the ground. */
+    public boolean rolls = true;
     /** How fast it's moving (units per second). The value here is what it starts with. */
     public final Vec3 velocity = new Vec3();
 
@@ -66,6 +68,7 @@ public final class Rigidbody extends Component {
         if (lockX) out.put("lockX", true);
         if (lockY) out.put("lockY", true);
         if (lockZ) out.put("lockZ", true);
+        if (!rolls) out.put("rolls", false);
         out.put("velocity", Json.vec3(velocity));
     }
 
@@ -81,6 +84,7 @@ public final class Rigidbody extends Component {
         lockX = Json.bool(in, "lockX", false);
         lockY = Json.bool(in, "lockY", false);
         lockZ = Json.bool(in, "lockZ", false);
+        rolls = Json.bool(in, "rolls", true);
         Json.vec3(in, "velocity", velocity);
     }
 }

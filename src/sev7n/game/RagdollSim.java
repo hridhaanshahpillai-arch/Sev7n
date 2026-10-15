@@ -181,6 +181,7 @@ final class RagdollSim {
     /** Moves the body on by 'dt' seconds. 'self' is the ragdoll's own entity (its colliders are ignored). */
     void step(Scene scene, double dt, Vec3 gravity, Entity self) {
         List<WorldCollider> world = nearby(scene, self, dt);
+        terrains = Ground.terrains(scene);
         int steps = Math.max(1, (int) Math.ceil(dt / STEP - 1e-9));
         double h = dt / steps;
         for (int s = 0; s < steps; s++) {
@@ -195,6 +196,18 @@ final class RagdollSim {
             }
             touchResponse();
         }
+        // still for a moment = resting (lying on the ground, ready to get up)
+        double fastest = 0;
+        for (int i = 0; i < count * 3; i++) fastest = Math.max(fastest, Math.abs(p[i] - q[i]));
+        double speed = fastest / h;
+        stillFor = speed < 0.25 ? stillFor + dt : 0;
+    }
+
+    private double stillFor;
+
+    /** True once the body has stopped moving (for a moment), e.g. lying on the floor. */
+    boolean resting() {
+        return stillFor >= 0.4;
     }
 
     /** The world's colliders near the body (anything it could reach this frame). */
@@ -276,8 +289,20 @@ final class RagdollSim {
         spread(b, st[1], push.negated());
     }
 
-    /** Pushes points and bones out of anything solid they've sunk into. */
+    private List<Entity> terrains = List.of();
+
+    /** Pushes points and bones out of anything solid they've sunk into (and up out of the ground). */
     private void collide(List<WorldCollider> world) {
+        if (!terrains.isEmpty()) {
+            for (int i = 0; i < count; i++) {
+                double ground = Ground.heightAt(terrains, p[i * 3], p[i * 3 + 2]);
+                double sunk = Double.isNaN(ground) ? 0 : ground + radius[i] - p[i * 3 + 1];
+                if (sunk <= 0) continue;
+                Vec3 up = new Vec3(0, sunk, 0);
+                add(i, up);
+                touched(i, up, 1);
+            }
+        }
         for (int i = 0; i < count; i++) {
             Vec3 at = position(i);
             Vec3 out = pushOut(at, radius[i], world);

@@ -27,6 +27,11 @@ final class TransformProxy implements SevenObject {
     }
 
     @Override
+    public java.util.Collection<String> propertyNames() {
+        return java.util.List.of("position", "rotation", "scale", "forward", "right", "up", "translate", "rotate", "lookAt");
+    }
+
+    @Override
     public Object getProperty(String name, int line) {
         return switch (name) {
             case "position" -> transform.position;

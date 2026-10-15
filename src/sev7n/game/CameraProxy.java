@@ -28,6 +28,11 @@ final class CameraProxy implements SevenObject {
     }
 
     @Override
+    public java.util.Collection<String> propertyNames() {
+        return java.util.List.of("orthographic", "size", "fieldOfView", "background");
+    }
+
+    @Override
     public Object getProperty(String name, int line) {
         return switch (name) {
             case "orthographic" -> camera.orthographic;

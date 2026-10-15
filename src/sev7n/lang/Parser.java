@@ -39,7 +39,10 @@ public class Parser {
     // ---------------------------------------------------------------- declarations
 
     private Stmt declaration() {
-        if (match(FUNC)) return funcDeclaration();
+        if (check(FUNC) && checkNext(IDENTIFIER)) {
+            advance();
+            return funcDeclaration();
+        }
         if (match(VAR)) return varDeclaration();
         if (match(STYLE)) return styleDeclaration();
         if (match(BEHAVIOUR)) return behaviourDeclaration();
@@ -67,15 +70,27 @@ public class Parser {
     private Stmt.Func funcDeclaration() {
         Token name = consume(IDENTIFIER, "Expected a function name after 'func'");
         consume(LEFT_PAREN, "Expected '(' after the function name");
+        return functionRest(name);
+    }
+
+    /** The parameters and body of a function, after its opening '('. Parameters may have defaults: func f(a, b = 2). */
+    private Stmt.Func functionRest(Token name) {
         List<Token> params = new ArrayList<>();
+        List<Expr> defaults = new ArrayList<>();
         if (!check(RIGHT_PAREN)) {
             do {
-                params.add(consume(IDENTIFIER, "Expected a parameter name"));
+                Token param = consume(IDENTIFIER, "Expected a parameter name");
+                Expr fallback = match(EQUAL) ? expression() : null;
+                if (fallback == null && !defaults.isEmpty() && defaults.get(defaults.size() - 1) != null) {
+                    throw new SevenError("'" + param.text() + "' needs a default too: once a parameter has one, the ones after it do as well", param.line());
+                }
+                params.add(param);
+                defaults.add(fallback);
             } while (match(COMMA));
         }
         consume(RIGHT_PAREN, "Expected ')' after the parameters");
         consume(LEFT_BRACE, "Expected '{' to start the function body");
-        return new Stmt.Func(name, params, block());
+        return new Stmt.Func(name, params, defaults, block());
     }
 
     private Stmt.Var varDeclaration() {
@@ -179,9 +194,9 @@ public class Parser {
     }
 
     private Expr assignment() {
-        Expr target = range();
+        Expr target = conditional();
 
-        if (match(EQUAL, PLUS_EQUAL, MINUS_EQUAL, STAR_EQUAL, SLASH_EQUAL)) {
+        if (match(EQUAL, PLUS_EQUAL, MINUS_EQUAL, STAR_EQUAL, SLASH_EQUAL, PERCENT_EQUAL)) {
             Token operator = previous();
             Expr value = assignment();
             if (operator.type() != EQUAL) {
@@ -203,9 +218,32 @@ public class Parser {
             case PLUS_EQUAL -> PLUS;
             case MINUS_EQUAL -> MINUS;
             case STAR_EQUAL -> STAR;
+            case PERCENT_EQUAL -> PERCENT;
             default -> SLASH;
         };
         return new Token(type, op.text().substring(0, 1), null, op.line(), op.file());
+    }
+
+    /** condition ? whenTrue : whenFalse  (e.g. var color = health < 30 ? #ff5555 : #50fa7b) */
+    private Expr conditional() {
+        Expr condition = orElse();
+        if (match(QUESTION)) {
+            Token question = previous();
+            Expr whenTrue = conditional();
+            consume(COLON, "Expected ':' in 'condition ? this : that'");
+            return new Expr.Conditional(condition, question, whenTrue, conditional());
+        }
+        return condition;
+    }
+
+    /** value ?? fallback: the value, or the fallback if the value is none (find("Boss") ?? entity) */
+    private Expr orElse() {
+        Expr expr = range();
+        while (match(QUESTION_QUESTION)) {
+            Token operator = previous();
+            expr = new Expr.Logical(expr, operator, range());
+        }
+        return expr;
     }
 
     private Expr range() {
@@ -244,11 +282,15 @@ public class Parser {
         return expr;
     }
 
+    /** < <= > >= and 'in' (is it in a list, a key of a map, part of a string?) */
     private Expr comparison() {
         Expr expr = term();
-        while (match(LESS, LESS_EQUAL, GREATER, GREATER_EQUAL)) {
+        while (match(LESS, LESS_EQUAL, GREATER, GREATER_EQUAL, IN)) {
             Token operator = previous();
-            expr = new Expr.Binary(expr, operator, term());
+            Expr right = term();
+            // 'x in 0..10' means x in the range, not (x in 0)..10
+            if (operator.type() == IN && match(DOT_DOT)) right = new Expr.Range(right, previous(), term());
+            expr = new Expr.Binary(expr, operator, right);
         }
         return expr;
     }
@@ -314,6 +356,36 @@ public class Parser {
         if (match(NONE)) return new Expr.Literal(null);
         if (match(NUMBER, STRING, COLOR)) return new Expr.Literal(previous().literal());
         if (match(IDENTIFIER)) return new Expr.Variable(previous());
+        if (match(FORMAT)) return format(previous());
+
+        // func(x) { ... }: a function as a value (for callbacks, filter(), sort()...)
+        if (match(FUNC)) {
+            Token keyword = previous();
+            consume(LEFT_PAREN, "Expected '(' after 'func'");
+            return new Expr.Lambda(functionRest(new Token(IDENTIFIER, "function", null, keyword.line(), keyword.file())));
+        }
+
+        // {key: value, ...}: a map
+        if (match(LEFT_BRACE)) {
+            Token brace = previous();
+            List<String> keys = new ArrayList<>();
+            List<Expr> values = new ArrayList<>();
+            if (!check(RIGHT_BRACE)) {
+                do {
+                    if (check(RIGHT_BRACE)) break; // a comma after the last entry is fine
+                    Token key = peek();
+                    if (key.type() == STRING) keys.add((String) advance().literal());
+                    else keys.add(propertyName().text());
+                    if (keys.subList(0, keys.size() - 1).contains(keys.get(keys.size() - 1))) {
+                        throw new SevenError("The key '" + keys.get(keys.size() - 1) + "' is in this map twice", key.line());
+                    }
+                    consume(COLON, "Expected ':' after the key '" + keys.get(keys.size() - 1) + "'");
+                    values.add(expression());
+                } while (match(COMMA));
+            }
+            consume(RIGHT_BRACE, "Expected '}' to close the map");
+            return new Expr.MapLiteral(brace, keys, values);
+        }
 
         if (match(LEFT_PAREN)) {
             Expr expr = expression();
@@ -337,7 +409,60 @@ public class Parser {
         throw new SevenError("Unexpected " + found, token.line());
     }
 
+    /** Splits f"HP: {hp} / {max}" into text and expressions. \{ and \} are plain braces. */
+    private Expr format(Token token) {
+        String raw = (String) token.literal();
+        List<Object> parts = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        int i = 0;
+        while (i < raw.length()) {
+            char c = raw.charAt(i);
+            if (c == '\\' && i + 1 < raw.length() && (raw.charAt(i + 1) == '{' || raw.charAt(i + 1) == '}')) {
+                text.append(raw.charAt(i + 1));
+                i += 2;
+            } else if (c == '{') {
+                int depth = 1;
+                int end = i + 1;
+                char quote = 0;
+                while (end < raw.length() && depth > 0) {
+                    char d = raw.charAt(end);
+                    if (quote != 0) { if (d == quote) quote = 0; }
+                    else if (d == '"' || d == '\'') quote = d;
+                    else if (d == '{') depth++;
+                    else if (d == '}') depth--;
+                    if (depth > 0) end++;
+                }
+                if (depth > 0) throw new SevenError("A '{' in this f\"...\" string is never closed with '}'", token.line());
+                String code = raw.substring(i + 1, end);
+                if (code.isBlank()) throw new SevenError("Empty {} in an f\"...\" string: put something inside, like {score}", token.line());
+                if (!text.isEmpty()) parts.add(text.toString());
+                text.setLength(0);
+                Expr expr;
+                try {
+                    Parser inner = new Parser(new Lexer(code, token.file(), token.line()).tokenize());
+                    expr = inner.expression();
+                    if (!inner.isAtEnd()) throw new SevenError("Unexpected '" + inner.peek().text() + "'", token.line());
+                } catch (SevenError e) {
+                    throw new SevenError("Inside {" + code + "} of an f\"...\" string: " + e.getMessage(), token.line());
+                }
+                parts.add(expr);
+                i = end + 1;
+            } else if (c == '}') {
+                throw new SevenError("A '}' in this f\"...\" string has no '{'. Write \\} for a plain brace", token.line());
+            } else {
+                text.append(c);
+                i++;
+            }
+        }
+        if (!text.isEmpty() || parts.isEmpty()) parts.add(text.toString());
+        return new Expr.Format(token, parts);
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private boolean checkNext(TokenType type) {
+        return current + 1 < tokens.size() && tokens.get(current + 1).type() == type;
+    }
 
     private boolean match(TokenType... types) {
         for (TokenType type : types) {

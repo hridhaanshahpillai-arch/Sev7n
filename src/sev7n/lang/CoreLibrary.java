@@ -1,12 +1,17 @@
 package sev7n.lang;
 
+import sev7n.lang.runtime.SevenCallable;
 import sev7n.lang.runtime.Values;
 import sev7n.math.Easing;
 import sev7n.math.Noise;
 import sev7n.math.Vec3;
 
 import java.awt.Color;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
 
@@ -24,6 +29,7 @@ final class CoreLibrary {
         installGeneral(seven);
         installMath(seven);
         installLists(seven);
+        installText(seven);
         installColors(seven);
     }
 
@@ -230,7 +236,8 @@ final class CoreLibrary {
         seven.defineNative("len", 1, 1, args -> switch (args.get(0)) {
             case List<?> list -> (double) list.size();
             case String s -> (double) s.length();
-            case null, default -> throw args.error("expects a list or string");
+            case Map<?, ?> map -> (double) map.size();
+            case null, default -> throw args.error("expects a list, string or map");
         });
         seven.defineNative("push", 2, 2, args -> {
             args.list(0).add(args.get(1));
@@ -241,13 +248,172 @@ final class CoreLibrary {
             if (list.isEmpty()) throw args.error("the list is empty");
             return list.remove(list.size() - 1);
         });
-        seven.defineNative("remove", 2, 2, args -> {
+        // insert(list, index, item): puts it before the item at index (len(list) adds it at the end)
+        seven.defineNative("insert", 3, 3, args -> {
             List<Object> list = args.list(0);
             int i = args.integer(1);
-            if (i < 0 || i >= list.size()) throw args.error("index " + i + " is out of range");
+            if (i < 0) i += list.size();
+            if (i < 0 || i > list.size()) throw args.error("index " + args.integer(1) + " is out of range (size is " + list.size() + ")");
+            list.add(i, args.get(2));
+            return null;
+        });
+        // remove(list, index) takes out the item at that index; remove(map, key) takes out that key. Both return what was removed.
+        seven.defineNative("remove", 2, 2, args -> {
+            if (args.get(0) instanceof Map<?, ?>) return args.map(0).remove(Values.stringify(args.get(1)));
+            List<Object> list = args.list(0);
+            int i = args.integer(1);
+            if (i < 0) i += list.size();
+            if (i < 0 || i >= list.size()) throw args.error("index " + args.integer(1) + " is out of range (size is " + list.size() + ")");
             return list.remove(i);
         });
-        seven.defineNative("contains", 2, 2, args -> args.list(0).contains(args.get(1)));
+        // removeItem(list, item): takes out the first item equal to it; true if there was one
+        seven.defineNative("removeItem", 2, 2, args -> {
+            List<Object> list = args.list(0);
+            for (int i = 0; i < list.size(); i++) {
+                if (Values.isEqual(list.get(i), args.get(1))) {
+                    list.remove(i);
+                    return true;
+                }
+            }
+            return false;
+        });
+        seven.defineNative("clear", 1, 1, args -> {
+            if (args.get(0) instanceof Map<?, ?>) args.map(0).clear();
+            else args.list(0).clear();
+            return null;
+        });
+        seven.defineNative("contains", 2, 2, args -> switch (args.get(0)) {
+            case Map<?, ?> map -> map.containsKey(Values.stringify(args.get(1)));
+            case String s -> s.contains(Values.stringify(args.get(1)));
+            default -> args.list(0).stream().anyMatch(x -> Values.isEqual(x, args.get(1)));
+        });
+        // indexOf(list, item) or indexOf(text, piece): where it first is, or -1
+        seven.defineNative("indexOf", 2, 2, args -> {
+            if (args.get(0) instanceof String s) return (double) s.indexOf(Values.stringify(args.get(1)));
+            List<Object> list = args.list(0);
+            for (int i = 0; i < list.size(); i++) if (Values.isEqual(list.get(i), args.get(1))) return (double) i;
+            return -1.0;
+        });
+        // slice(list or text, from, [to]): a copy of part of it; negative numbers count from the end
+        seven.defineNative("slice", 2, 3, args -> {
+            int size = args.get(0) instanceof String s ? s.length() : args.list(0).size();
+            int from = clampIndex(args.integer(1), size);
+            int to = args.has(2) ? clampIndex(args.integer(2), size) : size;
+            if (to < from) to = from;
+            if (args.get(0) instanceof String s) return s.substring(from, to);
+            return new ArrayList<>(args.list(0).subList(from, to));
+        });
+        seven.defineNative("copy", 1, 1, args -> switch (args.get(0)) {
+            case Map<?, ?> map -> new LinkedHashMap<>(args.map(0));
+            case Vec3 v -> v.copy();
+            default -> new ArrayList<>(args.list(0));
+        });
+        seven.defineNative("reverse", 1, 1, args -> {
+            Collections.reverse(args.list(0));
+            return args.list(0);
+        });
+        // sort(list) sorts numbers or text; sort(list, func(item) { return ... }) sorts by what the function gives
+        seven.defineNative("sort", 1, 2, args -> {
+            List<Object> list = args.list(0);
+            if (args.has(1)) {
+                SevenCallable key = args.function(1);
+                Map<Object, Object> keys = new java.util.IdentityHashMap<>();
+                for (Object item : list) keys.put(item, seven.callNested(key, item));
+                list.sort((a, b) -> compareValues(keys.get(a), keys.get(b), args));
+            } else {
+                list.sort((a, b) -> compareValues(a, b, args));
+            }
+            return list;
+        });
+        // with a function: filter keeps the items it says true for, map makes a list of what it gives back
+        seven.defineNative("filter", 2, 2, args -> {
+            List<Object> kept = new ArrayList<>();
+            for (Object item : new ArrayList<>(args.list(0))) if (Values.isTruthy(seven.callNested(args.function(1), item))) kept.add(item);
+            return kept;
+        });
+        seven.defineNative("map", 2, 2, args -> {
+            List<Object> out = new ArrayList<>();
+            for (Object item : new ArrayList<>(args.list(0))) out.add(seven.callNested(args.function(1), item));
+            return out;
+        });
+        // first(list, test): the first item the function says true for, or none
+        seven.defineNative("first", 2, 2, args -> {
+            for (Object item : new ArrayList<>(args.list(0))) if (Values.isTruthy(seven.callNested(args.function(1), item))) return item;
+            return null;
+        });
+        seven.defineNative("any", 2, 2, args -> {
+            for (Object item : new ArrayList<>(args.list(0))) if (Values.isTruthy(seven.callNested(args.function(1), item))) return true;
+            return false;
+        });
+        seven.defineNative("all", 2, 2, args -> {
+            for (Object item : new ArrayList<>(args.list(0))) if (!Values.isTruthy(seven.callNested(args.function(1), item))) return false;
+            return true;
+        });
+
+        // maps: {name: "Bob", hp: 100}
+        seven.defineNative("keys", 1, 1, args -> new ArrayList<Object>(args.map(0).keySet()));
+        seven.defineNative("values", 1, 1, args -> new ArrayList<>(args.map(0).values()));
+        seven.defineNative("has", 2, 2, args -> args.map(0).containsKey(Values.stringify(args.get(1))));
+        // get(map, key, [fallback]): the value, or the fallback (none if left out) when the key isn't there
+        seven.defineNative("get", 2, 3, args -> {
+            Map<String, Object> map = args.map(0);
+            String key = Values.stringify(args.get(1));
+            return map.containsKey(key) ? map.get(key) : args.has(2) ? args.get(2) : null;
+        });
+    }
+
+    private static int clampIndex(int index, int size) {
+        if (index < 0) index += size;
+        return Math.max(0, Math.min(size, index));
+    }
+
+    private static int compareValues(Object a, Object b, sev7n.lang.runtime.Args args) {
+        if (a instanceof Double x && b instanceof Double y) return Double.compare(x, y);
+        if (a instanceof String x && b instanceof String y) return x.compareToIgnoreCase(y);
+        throw args.error("can only sort numbers or text, not a " + Values.typeName(a) + " and a " + Values.typeName(b));
+    }
+
+    /** Text: upper("hi"), split("a,b", ","), join(list, ", "), fixed(3.14159, 2)... */
+    private static void installText(Interpreter seven) {
+        seven.defineNative("upper", 1, 1, args -> args.string(0).toUpperCase());
+        seven.defineNative("lower", 1, 1, args -> args.string(0).toLowerCase());
+        seven.defineNative("trim", 1, 1, args -> args.string(0).strip());
+        seven.defineNative("replace", 3, 3, args -> args.string(0).replace(Values.stringify(args.get(1)), Values.stringify(args.get(2))));
+        seven.defineNative("startsWith", 2, 2, args -> args.string(0).startsWith(Values.stringify(args.get(1))));
+        seven.defineNative("endsWith", 2, 2, args -> args.string(0).endsWith(Values.stringify(args.get(1))));
+        seven.defineNative("repeat", 2, 2, args -> args.string(0).repeat(Math.max(0, args.integer(1))));
+        // split("a,b,c", ",") -> ["a", "b", "c"];  split("abc") -> ["a", "b", "c"]
+        seven.defineNative("split", 1, 2, args -> {
+            String text = args.string(0);
+            String separator = args.has(1) ? Values.stringify(args.get(1)) : "";
+            List<Object> parts = new ArrayList<>();
+            if (separator.isEmpty()) {
+                for (char c : text.toCharArray()) parts.add(String.valueOf(c));
+            } else {
+                int start = 0;
+                for (int at = text.indexOf(separator); at >= 0; at = text.indexOf(separator, start)) {
+                    parts.add(text.substring(start, at));
+                    start = at + separator.length();
+                }
+                parts.add(text.substring(start));
+            }
+            return parts;
+        });
+        seven.defineNative("join", 1, 2, args -> args.list(0).stream().map(Values::stringify)
+                .collect(Collectors.joining(args.has(1) ? Values.stringify(args.get(1)) : "")));
+        // fixed(3.14159, 2) -> "3.14" (always that many decimals);  fixed(7, 0, 2) -> "07" (at least 2 digits before the point)
+        seven.defineNative("fixed", 2, 3, args -> {
+            int decimals = Math.max(0, Math.min(10, args.integer(1)));
+            String text = String.format(java.util.Locale.ROOT, "%." + decimals + "f", args.number(0));
+            if (args.has(2)) {
+                boolean negative = text.startsWith("-");
+                String digits = negative ? text.substring(1) : text;
+                int whole = digits.indexOf('.') < 0 ? digits.length() : digits.indexOf('.');
+                digits = "0".repeat(Math.max(0, args.integer(2) - whole)) + digits;
+                text = (negative ? "-" : "") + digits;
+            }
+            return text;
+        });
     }
 
     private static void installColors(Interpreter seven) {

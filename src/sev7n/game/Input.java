@@ -57,7 +57,6 @@ public final class Input {
         if (action == GLFW_RELEASE && held.remove(name)) released.add(name);
     }
 
-    /** Mouse position in game-view pixels, (0, 0) at the top-left. */
     private double viewWidth = 1280;
     private double viewHeight = 720;
 
@@ -77,7 +76,21 @@ public final class Input {
         return viewHeight;
     }
 
+    // how far the mouse moved since the last game update (for mouse-look), and whether a script wants it captured
+    private double moveX;
+    private double moveY;
+    private boolean hasPosition;
+    private boolean mouseLocked;
+    private boolean rightDown;
+    private boolean rightClicked;
+
+    /** Mouse position in game-view pixels, (0, 0) at the top-left. */
     public void mouseMoved(double x, double y) {
+        if (hasPosition) {
+            moveX += x - mouseX;
+            moveY += y - mouseY;
+        }
+        hasPosition = true;
         mouseX = x;
         mouseY = y;
     }
@@ -87,11 +100,55 @@ public final class Input {
         mouseDown = down;
     }
 
+    public void rightMouseButton(boolean down) {
+        if (down && !rightDown) rightClicked = true;
+        rightDown = down;
+    }
+
+    /** True while a script wants the cursor hidden and held in place (mouse-look). The window does the hiding. */
+    public boolean mouseLocked() {
+        return mouseLocked;
+    }
+
+    public void setMouseLocked(boolean locked) {
+        mouseLocked = locked;
+    }
+
+    /** Movement measured by the window itself (the editor keeps a captured cursor in the middle of the Game view). */
+    public void addMouseMove(double dx, double dy) {
+        moveX += dx;
+        moveY += dy;
+    }
+
+    /** The cursor jumped (captured or let go): don't count the jump as movement. */
+    public void forgetMousePosition() {
+        hasPosition = false;
+    }
+
+    public double mouseMoveX() {
+        return moveX;
+    }
+
+    public double mouseMoveY() {
+        return moveY;
+    }
+
+    public boolean isRightMouseDown() {
+        return rightDown;
+    }
+
+    public boolean wasRightMouseClicked() {
+        return rightClicked;
+    }
+
     /** Clears the one-frame states. Called after each game update. */
     public void endFrame() {
         pressed.clear();
         released.clear();
         mouseClicked = false;
+        rightClicked = false;
+        moveX = 0;
+        moveY = 0;
     }
 
     /** Lets go of everything, e.g. when the game view loses focus. */
@@ -99,6 +156,9 @@ public final class Input {
         for (String key : held) released.add(key);
         held.clear();
         mouseDown = false;
+        rightDown = false;
+        mouseLocked = false;
+        hasPosition = false;
     }
 
     // ---- queried by scripts ----

@@ -60,6 +60,14 @@ public final class GamePlayer {
         if (Files.exists(infoFile)) {
             Map<String, Object> info = Json.object(Json.parse(Files.readString(infoFile)));
             title = Json.string(info, "name", title);
+            String icon = Json.string(info, "icon", "");
+            if (!icon.isEmpty()) {
+                try {
+                    sev7n.ui.AppIcon.useForWindows(javax.imageio.ImageIO.read(infoFile.resolveSibling(icon).toFile()));
+                } catch (IOException e) {
+                    System.err.println("Couldn't read the game's icon " + icon + ": " + e.getMessage()); // keeps the Sev7n one
+                }
+            }
         }
         Project project = Project.openOrCreate(gameFolder);
         run(project, project.loadScene(), title, null);
@@ -81,6 +89,8 @@ public final class GamePlayer {
         new GamePlayer(screen.window()).loop(project, scene, title, graphics, screen, test);
     }
 
+    private boolean cursorLocked;
+
     private void loop(Project project, Scene scene, String title, RenderSettings graphics, Screen screen, TestShot test) {
         Log log = new Log();
         Input input = new Input();
@@ -95,6 +105,7 @@ public final class GamePlayer {
         input.setViewSize(windowWidth[0], windowHeight[0]);
         glfwSetMouseButtonCallback(window, (w, button, action, mods) -> {
             if (button == GLFW_MOUSE_BUTTON_LEFT) input.mouseButton(action == GLFW_PRESS);
+            if (button == GLFW_MOUSE_BUTTON_RIGHT) input.rightMouseButton(action == GLFW_PRESS);
         });
 
         Game game = new Game(scene, log, input);
@@ -114,6 +125,14 @@ public final class GamePlayer {
             double now = glfwGetTime();
             game.update(Math.min(now - last, 0.1));
             last = now;
+            if (game.successor() != null) game = game.successor(); // another scene, or a loaded save
+            boolean wantLocked = input.mouseLocked();
+            if (wantLocked != cursorLocked) {
+                // mouse-look: hide the cursor and keep it in the window
+                glfwSetInputMode(window, GLFW_CURSOR, wantLocked ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+                input.forgetMousePosition();
+                cursorLocked = wantLocked;
+            }
             if (game.quitRequested()) break;
             if (game.restartRequested()) {
                 // scripts asked to start over: a fresh copy of the scene from its file

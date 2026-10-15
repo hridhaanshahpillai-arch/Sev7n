@@ -6,6 +6,8 @@ import imgui.ImVec2;
 import sev7n.Sev7n;
 import sev7n.ui.Theme;
 
+import java.util.List;
+
 /** The menu bar, with Play / Pause in the middle (like Unity). */
 final class MainMenu {
 
@@ -46,6 +48,20 @@ final class MainMenu {
 
         if (ImGui.beginMenu("File")) {
             if (ImGui.menuItem("Save", "Ctrl+S")) ctx.saveAll();
+            ImGui.separator();
+            if (ImGui.menuItem("New Scene...")) askSceneName(SceneDialog.NEW, "Level2");
+            if (ImGui.beginMenu("Open Scene")) {
+                for (String name : ctx.project.sceneNames()) {
+                    if (ImGui.menuItem(name, "", name.equals(ctx.sceneName()))) ctx.openScene(name);
+                }
+                ImGui.endMenu();
+            }
+            boolean main = ctx.sceneName().equalsIgnoreCase(sev7n.project.Project.MAIN_SCENE);
+            if (ImGui.menuItem("Duplicate Scene...")) askSceneName(SceneDialog.DUPLICATE, ctx.sceneName() + " Copy");
+            if (ImGui.menuItem("Rename Scene...", "", false, !main)) askSceneName(SceneDialog.RENAME, ctx.sceneName());
+            if (main && ImGui.isItemHovered(imgui.flag.ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.setTooltip("Main is where the game starts, so it keeps its name");
+            if (ImGui.menuItem("Delete Scene...", "", false, !main)) askSceneName(SceneDialog.DELETE, ctx.sceneName());
+            ImGui.separator();
             if (ImGui.menuItem("Import Assets...")) ProjectPanel.importWithDialog(ctx);
             if (ImGui.menuItem("Play in Window", "Ctrl+F5")) ctx.playInWindow();
             if (ImGui.menuItem("Export Game...")) actions.exportGame();
@@ -57,6 +73,9 @@ final class MainMenu {
             ImGui.endMenu();
         }
         if (ImGui.beginMenu("Edit")) {
+            if (ImGui.menuItem("Undo", "Ctrl+Z", false, ctx.canUndo())) ctx.undo();
+            if (ImGui.menuItem("Redo", "Ctrl+Y", false, ctx.canRedo())) ctx.redo();
+            ImGui.separator();
             boolean hasSelection = ctx.selected() != null;
             if (ImGui.menuItem("Duplicate", "Ctrl+D", false, hasSelection)) ctx.duplicate(ctx.selected());
             if (ImGui.menuItem("Delete", "Del", false, hasSelection)) ctx.delete(ctx.selected());
@@ -71,6 +90,14 @@ final class MainMenu {
             }
             ImGui.separator();
             HierarchyPanel.effectMenu(ctx);
+            if (ImGui.beginMenu("Prefab")) {
+                List<String> prefabs = ctx.project.prefabNames();
+                if (prefabs.isEmpty()) ImGui.textDisabled("No prefabs yet: right-click an object > Save as Prefab");
+                for (String name : prefabs) {
+                    if (ImGui.menuItem(name)) ctx.createFromPrefab(name, new sev7n.math.Vec3());
+                }
+                ImGui.endMenu();
+            }
             ImGui.endMenu();
         }
         if (ImGui.beginMenu("Window")) {
@@ -89,6 +116,8 @@ final class MainMenu {
             if (ImGui.menuItem("2D Games")) actions.openGuide("2D.md");
             if (ImGui.menuItem("Physics")) actions.openGuide("PHYSICS.md");
             if (ImGui.menuItem("Animation")) actions.openGuide("ANIMATION.md");
+            if (ImGui.menuItem("First-person and Open Worlds")) actions.openGuide("WORLDS.md");
+            if (ImGui.menuItem("Scenes, Saves and Prefabs")) actions.openGuide("SCENES.md");
             if (ImGui.menuItem("HUD, Menus and Sound")) actions.openGuide("HUD.md");
             if (ImGui.menuItem("Ragdolls")) actions.openGuide("RAGDOLLS.md");
             if (ImGui.menuItem("NPCs and AI")) actions.openGuide("NPC.md");
@@ -101,13 +130,72 @@ final class MainMenu {
         }
 
         drawPlayControls();
+        drawNewSceneDialog();
 
-        String status = ctx.project.name() + (ctx.anythingUnsaved() ? " *" : "")
+        String status = ctx.project.name() + "  /  " + ctx.sceneName() + (ctx.anythingUnsaved() ? " *" : "")
                 + (ctx.editorSettings.showFps ? "    " + Math.round(ImGui.getIO().getFramerate()) + " fps" : "");
         ImGui.sameLine(ImGui.getWindowWidth() - ImGui.calcTextSize(status).x - 16);
         ImGui.textDisabled(status);
 
         ImGui.endMainMenuBar();
+    }
+
+    private enum SceneDialog { NEW, DUPLICATE, RENAME, DELETE }
+
+    private SceneDialog sceneDialog;
+    private boolean openSceneDialog;
+    private final imgui.type.ImString sceneNameInput = new imgui.type.ImString("Level2", 64);
+
+    private void askSceneName(SceneDialog dialog, String startingName) {
+        sceneDialog = dialog;
+        sceneNameInput.set(startingName);
+        openSceneDialog = true;
+    }
+
+    /** File > New / Duplicate / Rename / Delete Scene: asks for a name (or, for Delete, to make sure). */
+    private void drawNewSceneDialog() {
+        if (openSceneDialog) {
+            ImGui.openPopup("Scene##dialog");
+            openSceneDialog = false;
+        }
+        if (!ImGui.beginPopupModal("Scene##dialog", imgui.flag.ImGuiWindowFlags.AlwaysAutoResize | imgui.flag.ImGuiWindowFlags.NoTitleBar)) return;
+        if (sceneDialog == SceneDialog.DELETE) {
+            ImGui.text("Delete the scene " + ctx.sceneName() + "?");
+            ImGui.textDisabled("It goes to the Recycle Bin, so you can get it back.");
+            if (ImGui.button("Delete", 120, 0)) {
+                ctx.deleteScene();
+                ImGui.closeCurrentPopup();
+            }
+        } else {
+            ImGui.text(switch (sceneDialog) {
+                case NEW -> "Name of the new scene:";
+                case DUPLICATE -> "Copy " + ctx.sceneName() + " as:";
+                default -> "Rename " + ctx.sceneName() + " to:";
+            });
+            ImGui.setNextItemWidth(260);
+            if (ImGui.isWindowAppearing()) ImGui.setKeyboardFocusHere();
+            boolean enter = ImGui.inputText("##sceneName", sceneNameInput, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue);
+            ImGui.textDisabled("Scripts open it with loadScene(\"" + sceneNameInput.get().trim() + "\")");
+            String verb = switch (sceneDialog) {
+                case NEW -> "Create";
+                case DUPLICATE -> "Copy";
+                default -> "Rename";
+            };
+            if (ImGui.button(verb, 120, 0) || enter) {
+                String name = sceneNameInput.get();
+                if (!name.isBlank()) {
+                    switch (sceneDialog) {
+                        case NEW -> ctx.createScene(name);
+                        case DUPLICATE -> ctx.duplicateScene(name);
+                        default -> ctx.renameScene(name);
+                    }
+                }
+                ImGui.closeCurrentPopup();
+            }
+        }
+        ImGui.sameLine();
+        if (ImGui.button("Cancel", 120, 0) || ImGui.isKeyPressed(imgui.flag.ImGuiKey.Escape)) ImGui.closeCurrentPopup();
+        ImGui.endPopup();
     }
 
     /** "Sev7n" with a purple 7. Clicking it opens Settings. */

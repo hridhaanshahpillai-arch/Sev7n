@@ -29,11 +29,18 @@ import java.util.List;
 public final class Sev7n {
 
     public static final String NAME = "Sev7n";
-    public static final String VERSION = "0.6 alpha";
+    public static final String VERSION = "0.7.6 alpha";
 
     private Sev7n() { }
 
     public static void main(String[] args) throws Exception {
+        if (Platform.mac() && !startedOnFirstThread()) {
+            // macOS only lets the first thread open windows: start again with Java told to use it
+            List<String> command = new java.util.ArrayList<>(javaCommand());
+            command.addAll(Arrays.asList(args));
+            System.exit(new ProcessBuilder(command).inheritIO().start().waitFor());
+        }
+        if (Platform.mac()) System.setProperty("java.awt.headless", "true"); // AWT draws text for the HUD, but mustn't open windows there
         // LWJGL's scratch memory for native calls: Vulkan drivers can list hundreds of extensions
         Configuration.STACK_SIZE.set(512);
 
@@ -89,12 +96,19 @@ public final class Sev7n {
         // not this process's own program: in the Sev7n download that's Sev7n.exe, not Java
         Path bin = Path.of(System.getProperty("java.home"), "bin");
         String java = Files.isRegularFile(bin.resolve("javaw.exe")) ? bin.resolve("javaw.exe").toString()
-                : Files.isRegularFile(bin.resolve("java.exe")) ? bin.resolve("java.exe").toString()
+                : Files.isRegularFile(bin.resolve(Platform.program("java"))) ? bin.resolve(Platform.program("java")).toString()
                 : ProcessHandle.current().info().command().orElse("java");
+        List<String> command = new java.util.ArrayList<>(List.of(java));
+        if (Platform.mac()) command.add("-XstartOnFirstThread"); // macOS only lets windows open on the first thread
         Path jar = engineJar();
-        return jar != null
-                ? List.of(java, "-jar", jar.toString())
-                : List.of(java, "-cp", System.getProperty("java.class.path"), Sev7n.class.getName());
+        if (jar != null) command.addAll(List.of("-jar", jar.toString()));
+        else command.addAll(List.of("-cp", System.getProperty("java.class.path"), Sev7n.class.getName()));
+        return command;
+    }
+
+    /** On a Mac: did Java start with -XstartOnFirstThread (it sets this variable for itself when it did)? */
+    private static boolean startedOnFirstThread() {
+        return "1".equals(System.getenv("JAVA_STARTED_ON_FIRST_THREAD_" + ProcessHandle.current().pid()));
     }
 
     /** The sev7n.jar this is running from, or null when running from compiled classes. */

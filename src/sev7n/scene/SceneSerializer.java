@@ -70,9 +70,54 @@ public final class SceneSerializer {
         map.put("name", e.name);
         map.put("active", e.active);
         map.put("tags", new ArrayList<Object>(e.tags));
+        if (e.parent >= 0) map.put("parent", (double) e.parent);
         map.put("transform", transform);
         map.put("components", components);
         return map;
+    }
+
+    // ---------------------------------------------------------------- families (prefabs with children)
+
+    /** An entity and all its children (and theirs) as data: the entity's map, with its family under "children". */
+    public static Map<String, Object> familyToMap(Scene scene, Entity root) {
+        Map<String, Object> map = entityToMap(root);
+        map.remove("parent"); // a prefab doesn't belong to anything
+        List<Object> children = new ArrayList<>();
+        for (Entity child : Hierarchy.descendants(scene, root)) children.add(entityToMap(child));
+        if (!children.isEmpty()) map.put("children", children);
+        return map;
+    }
+
+    /**
+     * Places a saved family (from familyToMap, or a single entity's map) in a scene with new ids,
+     * the root at 'position' and the children where they were around it. Returns the root.
+     */
+    public static Entity placeFamily(Scene scene, Map<String, Object> data, String name, sev7n.math.Vec3 position) {
+        String rootName = scene.uniqueName(name); // worked out before it's in the scene, so it isn't counted against itself
+        Entity root = scene.create(rootName);
+        loadInto(root, data);
+        root.name = rootName;
+        root.parent = -1;
+        sev7n.math.Vec3 moved = position.minus(root.transform.position);
+        root.transform.position.set(position);
+        Map<Long, Entity> byOldId = new java.util.HashMap<>();
+        byOldId.put((long) Json.number(data, "id", -1), root);
+        List<Entity> placed = new ArrayList<>();
+        for (Object item : Json.list(data, "children")) {
+            Map<String, Object> childData = Json.object(item);
+            String childName = scene.uniqueName(Json.string(childData, "name", "Entity"));
+            Entity child = scene.create(childName);
+            loadInto(child, childData);
+            child.name = childName;
+            child.transform.position.set(child.transform.position.plus(moved));
+            byOldId.put((long) Json.number(childData, "id", -1), child);
+            placed.add(child);
+        }
+        for (Entity child : placed) {
+            Entity parent = byOldId.get(child.parent);
+            child.parent = parent == null ? root.id() : parent.id();
+        }
+        return root;
     }
 
     /** Adds an entity saved by entityToMap to a scene, keeping its id. */
@@ -86,6 +131,7 @@ public final class SceneSerializer {
     public static void loadInto(Entity e, Map<String, Object> map) {
         e.name = Json.string(map, "name", e.name);
         e.active = Json.bool(map, "active", true);
+        e.parent = (long) Json.number(map, "parent", -1);
         e.tags.clear();
         for (Object tag : Json.list(map, "tags")) {
             if (tag instanceof String s) e.tags.add(s);

@@ -488,8 +488,12 @@ final class EightsPanel {
                     result = new Color(rgb[0], rgb[1], rgb[2]);
                 }
             }
-            case ENTITY -> ImGui.textDisabled("Self");
-            case ANY -> result = value instanceof String ? editText(og, id, value, width) : editNumber(value, width);
+            case ENTITY -> ImGui.textDisabled(id.startsWith("var-") ? "none" : "Self");
+            case LIST -> ImGui.textDisabled(id.startsWith("var-") ? "empty" : "wire a list in");
+            case ANY -> {
+                if (value == null) ImGui.textDisabled("wire a value in");
+                else result = value instanceof String ? editText(og, id, value, width) : editNumber(value, width);
+            }
             case EXEC -> { }
         }
         ImGui.popID();
@@ -652,6 +656,7 @@ final class EightsPanel {
             for (Variable v : og.graph.variables) {
                 addEntry(og, entries, NodeLibrary.get(NodeLibrary.GET_VARIABLE), "Get " + v.name, v.name, query);
                 addEntry(og, entries, NodeLibrary.get(NodeLibrary.SET_VARIABLE), "Set " + v.name, v.name, query);
+                if (v.type == ValueType.NUMBER) addEntry(og, entries, NodeLibrary.get("variable.add"), "Add to " + v.name, v.name, query);
             }
             return entries;
         }
@@ -662,7 +667,7 @@ final class EightsPanel {
     }
 
     private void addEntry(OpenGraph og, List<Runnable> entries, NodeType type, String label, String variable, String query) {
-        if (!query.isEmpty() && !label.toLowerCase().contains(query)) return;
+        if (!query.isEmpty() && !matches(label + " " + type.keywords, query)) return;
         if (pendingPin >= 0 && compatiblePin(og, type) < 0) return;
         entries.add(() -> {
             if (ImGui.selectable(label)) {
@@ -671,6 +676,13 @@ final class EightsPanel {
             }
             if (ImGui.isItemHovered() && !type.description.isEmpty()) ImGui.setTooltip(type.description);
         });
+    }
+
+    /** Every word of the search appears somewhere in the text (so "set col" finds Set Color). */
+    private static boolean matches(String text, String query) {
+        String lower = text.toLowerCase();
+        for (String word : query.split("\\s+")) if (!lower.contains(word)) return false;
+        return true;
     }
 
     private void createNode(OpenGraph og, NodeType type, String variable) {
@@ -748,8 +760,16 @@ final class EightsPanel {
             case EVENTS -> new Color(0xEE6666);
             case FLOW -> new Color(0xA9ABB6);
             case ACTIONS -> new Color(0x97E1F1);
+            case PHYSICS -> new Color(0x6FD8C0);
+            case INPUT -> new Color(0xF286C4);
+            case CHARACTERS -> new Color(0x9EB8FF);
+            case HUD -> new Color(0xD0B8F4);
+            case SOUND -> new Color(0xFFA8B8);
+            case SCENES -> new Color(0xB5F4C6);
+            case WORLD -> new Color(0xF4E7A1);
             case VALUES -> new Color(0x62E884);
             case MATH -> new Color(0xE7EE98);
+            case TEXT -> new Color(0xD8D8E0);
             case VARIABLES -> Theme.ACCENT;
         };
     }

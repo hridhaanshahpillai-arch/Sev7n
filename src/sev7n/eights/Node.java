@@ -39,6 +39,7 @@ public final class Node {
     public String displayTitle() {
         if (!type.usesVariable) return type.title;
         String name = variable.isEmpty() ? "(variable)" : variable;
-        return type.id.equals(NodeLibrary.GET_VARIABLE) ? name : "Set " + name;
+        if (type.id.equals(NodeLibrary.GET_VARIABLE)) return name;
+        return (type.id.equals(NodeLibrary.SET_VARIABLE) ? "Set " : "Add to ") + name;
     }
 }

@@ -38,4 +38,16 @@ public sealed interface Expr {
 
     /** 0..10 (end is exclusive, like Python's range) */
     record Range(Expr from, Token operator, Expr to) implements Expr { }
+
+    /** condition ? whenTrue : whenFalse */
+    record Conditional(Expr condition, Token question, Expr whenTrue, Expr whenFalse) implements Expr { }
+
+    /** func(x) { return x * 2 }: a function without a name, as a value */
+    record Lambda(Stmt.Func function) implements Expr { }
+
+    /** {name: "Bob", hp: 100}: keys are names or strings */
+    record MapLiteral(Token brace, List<String> keys, List<Expr> values) implements Expr { }
+
+    /** f"Score: {score}": each part is a String (as written) or an Expr (worked out and joined in) */
+    record Format(Token token, List<Object> parts) implements Expr { }
 }

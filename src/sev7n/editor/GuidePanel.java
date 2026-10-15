@@ -55,6 +55,8 @@ final class GuidePanel {
             new Guide("2D Games", Path.of("docs", "2D.md")),
             new Guide("Physics", Path.of("docs", "PHYSICS.md")),
             new Guide("Animation", Path.of("docs", "ANIMATION.md")),
+            new Guide("First-person and Open Worlds", Path.of("docs", "WORLDS.md")),
+            new Guide("Scenes, Saves and Prefabs", Path.of("docs", "SCENES.md")),
             new Guide("HUD, Menus and Sound", Path.of("docs", "HUD.md")),
             new Guide("Ragdolls", Path.of("docs", "RAGDOLLS.md")),
             new Guide("NPCs and AI", Path.of("docs", "NPC.md")),

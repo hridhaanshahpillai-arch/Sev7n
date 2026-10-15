@@ -20,6 +20,7 @@ import sev7n.render.SceneRenderer;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.Npc;
 import sev7n.scene.Ragdoll;
+import sev7n.scene.Terrain;
 import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Rigidbody;
 import sev7n.scene.SpriteAnimator;
@@ -91,6 +92,16 @@ final class InspectorPanel {
             Arrays.stream(tags.get().split(",")).map(String::trim).filter(t -> !t.isEmpty()).forEach(entity.tags::add);
             ctx.markDirty();
         }
+        sev7n.scene.Entity parent = entity.parent < 0 ? null : ctx.scene().findById(entity.parent);
+        if (parent != null) {
+            ImGui.textDisabled("Child of");
+            ImGui.sameLine();
+            if (ImGui.smallButton(parent.name)) ctx.select(parent);
+            if (ImGui.isItemHovered()) ImGui.setTooltip("Select the parent");
+            ImGui.sameLine();
+            if (ImGui.smallButton("Unparent")) ctx.setParent(entity, null);
+            if (ImGui.isItemHovered()) ImGui.setTooltip("Stop following " + parent.name + " (it stays where it is)");
+        }
         ImGui.spacing();
     }
 
@@ -142,6 +153,7 @@ final class InspectorPanel {
             case CapsuleCollider c -> drawCapsuleCollider(entity, c);
             case ParticleEmitter p -> drawParticleEmitter(p);
             case Npc n -> drawNpc(entity, n);
+            case Terrain t -> drawTerrain(t);
             case Ragdoll r -> drawRagdoll(entity, r);
             case Behaviour b -> drawBehaviour(b);
             default -> false;
@@ -407,9 +419,19 @@ final class InspectorPanel {
         ImGui.sameLine();
         if (ImGui.checkbox("Z##lock", lockZ)) lockZ = !lockZ;
         if (ImGui.isItemHovered()) ImGui.setTooltip("Never moves along a locked axis (lock Z for 2D games)");
+        double stepHeight = r.stepHeight;
+        if (entity.has(CapsuleCollider.class)) {
+            stepHeight = Widgets.number("Step height", r.stepHeight, 0.01f, 0, 2);
+            if (ImGui.isItemHovered()) ImGui.setTooltip("Walks up steps, curbs and ledges this high without jumping (0 = never)");
+        }
+        boolean rolls = r.rolls;
+        if (entity.has(SphereCollider.class)) rolls = Widgets.checkbox("Rolls", r.rolls, "Turns as it rolls along the ground, like a real ball");
         boolean changed = Widgets.vec3("Start velocity", r.velocity, 0.05f);
         changed |= mass != r.mass || gravity != r.gravityScale || bounciness != r.bounciness || friction != r.friction
-                || drag != r.drag || kinematic != r.kinematic || lockX != r.lockX || lockY != r.lockY || lockZ != r.lockZ;
+                || drag != r.drag || kinematic != r.kinematic || lockX != r.lockX || lockY != r.lockY || lockZ != r.lockZ
+                || stepHeight != r.stepHeight || rolls != r.rolls;
+        r.stepHeight = stepHeight;
+        r.rolls = rolls;
         r.mass = mass;
         r.gravityScale = gravity;
         r.bounciness = bounciness;
@@ -423,6 +445,32 @@ final class InspectorPanel {
             Widgets.hint("Add a Box, Sphere or Capsule Collider so it can land on and bump into things.");
         }
         return changed;
+    }
+
+    // ---------------------------------------------------------------- terrain
+
+    private boolean drawTerrain(Terrain t) {
+        String before = t.shapeKey() + t.sand + t.grass + t.rock + t.snow;
+        t.size = Widgets.number("Size", t.size, 1f, 10, 5000);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("How wide and deep the land is");
+        t.resolution = Widgets.integer("Detail", t.resolution, 8, 512);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Squares across: more = finer hills (and more work for the PC)");
+        t.height = Widgets.number("Height", t.height, 0.2f, 0, 500);
+        t.roughness = Widgets.number("Hill size", t.roughness, 0.0005f, 0.001f, 0.2f);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Smaller = wide, gentle hills; bigger = lots of small bumps");
+        t.seed = Widgets.integer("Seed", t.seed, 0, 99999);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Different numbers make different land");
+        ImGui.setCursorPosX(Widgets.labelWidth());
+        if (ImGui.button("New land", -1, 0)) t.seed = new java.util.Random().nextInt(99999);
+        t.flatRadius = Widgets.number("Flat middle", t.flatRadius, 0.2f, 0, 1000);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("A flat circle this wide in the middle: somewhere to start");
+        t.trees = Widgets.integer("Trees", t.trees, 0, 5000);
+        t.sand = Widgets.color("Sand", t.sand);
+        t.grass = Widgets.color("Grass", t.grass);
+        t.rock = Widgets.color("Rock", t.rock);
+        t.snow = Widgets.color("Snow", t.snow);
+        Widgets.hint("Characters walk on it, ragdolls land on it, raycasts hit it and NPCs find their way over it. Turn on fog in Settings to set how far you can see.");
+        return !before.equals(t.shapeKey() + t.sand + t.grass + t.rock + t.snow);
     }
 
     // ---------------------------------------------------------------- ragdoll

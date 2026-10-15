@@ -12,6 +12,7 @@ import sev7n.scene.Entity;
 import sev7n.scene.Light;
 import sev7n.scene.Npc;
 import sev7n.scene.Ragdoll;
+import sev7n.scene.Terrain;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Scene;
@@ -117,6 +118,7 @@ public final class SceneRenderer implements AutoCloseable {
     public void render(Scene scene, RenderView view, Color background, Overlays overlays) {
         assets.setPixelated(settings.pixelatedTextures);
         gpu.begin(frame(scene, view, background));
+        eye = view.eye();
         drawMeshes(scene);
         if (overlays.grid()) drawGrid(view);
         drawSprites(scene, view);
@@ -149,9 +151,19 @@ public final class SceneRenderer implements AutoCloseable {
 
     // ---------------------------------------------------------------- meshes
 
+    private Vector3f eye = new Vector3f();
+
+    /** How far things are drawn: just past where the fog hides everything, or (without fog) very far. */
+    private float drawDistance() {
+        return settings.fog ? (float) settings.fogEnd + 5 : 2000;
+    }
+
     private void drawMeshes(Scene scene) {
         Map<Entity, Posed> animated = poseCharacters(scene);
+        float far = drawDistance();
         for (Entity entity : scene.entities()) {
+            Terrain terrain = entity.get(Terrain.class);
+            if (entity.active && terrain != null) drawTerrain(entity, terrain, far);
             ParticleEmitter emitter = entity.get(ParticleEmitter.class);
             if (entity.active && emitter != null && emitter.look == ParticleEmitter.Look.MODEL) drawModelParticles(emitter); // solid, so drawn with the meshes
             MeshRenderer renderer = entity.get(MeshRenderer.class);
@@ -160,6 +172,7 @@ public final class SceneRenderer implements AutoCloseable {
             // the renderer's texture (if set) replaces the model's own; its color tints every part
             GpuTexture override = assets.texture(renderer.texture, false);
             Model shape = model(renderer.mesh);
+            if (settings.fog && beyond(entity, shape, far)) continue; // hidden by the fog anyway
             Posed character = animated.get(entity);
             List<GpuMesh> posed = character != null && character.model == shape ? character.meshes : null;
             for (int i = 0; i < shape.parts.size(); i++) {
@@ -168,6 +181,98 @@ public final class SceneRenderer implements AutoCloseable {
                 gpu.drawLit(mesh, override != null ? override : part.texture(), model, multiply(renderer.color, part.color()));
             }
         }
+    }
+
+    /** True if all of an entity's model is further than 'far' from the eye. */
+    private boolean beyond(Entity entity, Model shape, float far) {
+        Vec3 p = entity.transform.position, s = entity.transform.scale;
+        float reach = new Vector3f(shape.boundsMax).sub(shape.boundsMin).length() / 2
+                * (float) Math.max(Math.abs(s.x), Math.max(Math.abs(s.y), Math.abs(s.z)));
+        return eye.distance((float) p.x, (float) p.y, (float) p.z) - reach > far;
+    }
+
+    // ---------------------------------------------------------------- terrain
+
+    /** A terrain's mesh and colour map, made for one set of its settings. */
+    private record TerrainLook(String key, GpuMesh mesh, GpuTexture texture) {
+        void close() {
+            mesh.close();
+            texture.close();
+        }
+    }
+
+    private final Map<Entity, TerrainLook> terrainLooks = new IdentityHashMap<>();
+    private static final Color TRUNK = new Color(0x6B4F3A);
+    private static final Color LEAVES = new Color(0x3F7A3C);
+
+    private void drawTerrain(Entity entity, Terrain terrain, float far) {
+        String key = terrain.shapeKey() + "|" + terrain.sand + terrain.grass + terrain.rock + terrain.snow;
+        TerrainLook look = terrainLooks.get(entity);
+        if (look == null || !look.key().equals(key)) {
+            if (look != null) look.close();
+            look = new TerrainLook(key, gpu.mesh(terrainMesh(terrain)), gpu.texture(terrainColours(terrain), false));
+            terrainLooks.put(entity, look);
+        }
+        Vec3 p = entity.transform.position;
+        model.identity().translate((float) p.x, (float) p.y, (float) p.z);
+        gpu.drawLit(look.mesh(), look.texture(), model, Color.WHITE);
+
+        // trees: a trunk and a round top, skipped when out of sight in the distance
+        GpuMesh trunk = builtIn.get("cylinder"), top = builtIn.get("sphere");
+        for (double[] tree : terrain.trees()) {
+            float x = (float) (p.x + tree[0]), y = (float) (p.y + tree[2]), z = (float) (p.z + tree[1]), s = (float) tree[3];
+            if (eye.distance(x, y, z) > far) continue;
+            model.identity().translate(x, y + 1.1f * s, z).scale(0.35f * s, 2.2f * s, 0.35f * s);
+            gpu.drawLit(trunk, null, model, TRUNK);
+            model.identity().translate(x, y + 3.0f * s, z).scale(2.4f * s, 2.8f * s, 2.4f * s);
+            gpu.drawLit(top, null, model, LEAVES);
+        }
+    }
+
+    /** The land as triangles: two per square, the same way Terrain works out heights between corners. */
+    private static MeshData terrainMesh(Terrain terrain) {
+        float[] h = terrain.heights();
+        int n = Math.max(2, terrain.resolution);
+        float size = (float) terrain.size, cell = size / n;
+        MeshData.Builder b = new MeshData.Builder();
+        float low = Float.MAX_VALUE, high = -Float.MAX_VALUE;
+        for (int iz = 0; iz <= n; iz++) {
+            for (int ix = 0; ix <= n; ix++) {
+                float y = h[iz * (n + 1) + ix];
+                low = Math.min(low, y);
+                high = Math.max(high, y);
+                float left = h[iz * (n + 1) + Math.max(0, ix - 1)], right = h[iz * (n + 1) + Math.min(n, ix + 1)];
+                float back = h[Math.max(0, iz - 1) * (n + 1) + ix], front = h[Math.min(n, iz + 1) * (n + 1) + ix];
+                Vector3f normal = new Vector3f(left - right, 2 * cell, back - front).normalize();
+                b.vertex(((float) ix / n - 0.5f) * size, y, ((float) iz / n - 0.5f) * size, normal.x, normal.y, normal.z, (float) ix / n, (float) iz / n);
+            }
+        }
+        for (int iz = 0; iz < n; iz++) {
+            for (int ix = 0; ix < n; ix++) {
+                int a = iz * (n + 1) + ix, right = a + 1, down = a + n + 1, both = down + 1;
+                b.triangle(a, down, right);
+                b.triangle(both, right, down);
+            }
+        }
+        return b.build(false, new Vector3f(-size / 2, low, -size / 2), new Vector3f(size / 2, high, size / 2));
+    }
+
+    /** The land's colours (sand, grass, rock, snow by height and steepness), with a little grain. */
+    private static BufferedImage terrainColours(Terrain terrain) {
+        int pixels = 256;
+        BufferedImage image = new BufferedImage(pixels, pixels, BufferedImage.TYPE_INT_RGB);
+        java.util.Random grain = new java.util.Random(terrain.seed);
+        for (int py = 0; py < pixels; py++) {
+            for (int px = 0; px < pixels; px++) {
+                double x = ((px + 0.5) / pixels - 0.5) * terrain.size, z = ((py + 0.5) / pixels - 0.5) * terrain.size;
+                double hh = terrain.heightAt(x, z);
+                Color colour = terrain.colorAt(Double.isNaN(hh) ? 0 : hh / Math.max(0.001, terrain.height), terrain.steepness(x, z));
+                double shade = 0.94 + grain.nextDouble() * 0.12;
+                int r = (int) Math.min(255, colour.getRed() * shade), g = (int) Math.min(255, colour.getGreen() * shade), bl = (int) Math.min(255, colour.getBlue() * shade);
+                image.setRGB(px, py, r << 16 | g << 8 | bl);
+            }
+        }
+        return image;
     }
 
     // ---------------------------------------------------------------- animated models
@@ -693,6 +798,7 @@ public final class SceneRenderer implements AutoCloseable {
         wireSphere.close();
         wireCapsuleSides.close();
         fans.values().forEach(GpuMesh::close);
+        terrainLooks.values().forEach(TerrainLook::close);
         hudPainter.close();
         softDot.close();
         tileMeshes.values().forEach(t -> t.mesh().close());

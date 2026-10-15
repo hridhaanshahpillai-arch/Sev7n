@@ -75,13 +75,17 @@ final class Ui {
 
     /** A rounded box with a faint edge: the background of a menu or window. */
     void panel(double x, double y, double w, double h, Color color) {
-        hud.add(new Hud.Box(x - 1.5, y - 1.5, w + 3, h + 3, new Color(255, 255, 255, 28), ROUND + 1.5));
-        hud.add(new Hud.Box(x, y, w, h, color, ROUND));
+        x += hud.originX(); // measured from the anchor (see Hud.anchor)
+        y += hud.originY();
+        hud.addPlaced(new Hud.Box(x - 1.5, y - 1.5, w + 3, h + 3, new Color(255, 255, 255, 28), ROUND + 1.5));
+        hud.addPlaced(new Hud.Box(x, y, w, h, color, ROUND));
         if (inside(x, y, w, h)) overControl = true;
     }
 
     /** A button with a label; true on the frame it's clicked. 'primary' ones are purple. */
     boolean button(String label, double x, double y, double w, double h, boolean primary) {
+        x += hud.originX(); // measured from the anchor (see Hud.anchor)
+        y += hud.originY();
         String id = "button " + label + " " + Math.round(x) + "," + Math.round(y);
         boolean hovered = inside(x, y, w, h);
         if (hovered) overControl = true;
@@ -91,15 +95,17 @@ final class Ui {
 
         Color fill = primary ? (hovered ? ACCENT_HOVER : ACCENT) : (hovered ? HOVER : CONTROL);
         double sink = held && hovered ? 2 : 0; // pressed in a little while held
-        if (!held) hud.add(new Hud.Box(x, y + 3, w, h, new Color(0, 0, 0, 70), ROUND)); // shadow
-        hud.add(new Hud.Box(x, y + sink, w, h, fill, ROUND));
+        if (!held) hud.addPlaced(new Hud.Box(x, y + 3, w, h, new Color(0, 0, 0, 70), ROUND)); // shadow
+        hud.addPlaced(new Hud.Box(x, y + sink, w, h, fill, ROUND));
         double size = Math.min(h * 0.45, 30);
-        hud.add(new Hud.Text(label, x + w / 2, y + sink + (h - Hud.textHeight(size)) / 2, size, primary ? DARK_TEXT : TEXT, "center", !primary));
+        hud.addPlaced(new Hud.Text(label, x + w / 2, y + sink + (h - Hud.textHeight(size)) / 2, size, primary ? DARK_TEXT : TEXT, "center", !primary));
         return clicked;
     }
 
     /** A slider from 'min' to 'max': drag it (or click the track); returns the new value. */
     double slider(String label, double x, double y, double w, double value, double min, double max) {
+        x += hud.originX(); // measured from the anchor (see Hud.anchor)
+        y += hud.originY();
         String id = "slider " + label + " " + Math.round(x) + "," + Math.round(y);
         double h = 44;
         double trackY = y + 30;
@@ -111,17 +117,19 @@ final class Ui {
         }
         double amount = max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0;
 
-        hud.add(new Hud.Text(label, x, y - 4, 22, MUTED, "left"));
-        hud.add(new Hud.Text(format(value), x + w, y - 4, 22, TEXT, "right"));
-        hud.add(new Hud.Box(x, trackY, w, 8, CONTROL, 4));
-        hud.add(new Hud.Box(x, trackY, w * amount, 8, ACCENT, 4));
+        hud.addPlaced(new Hud.Text(label, x, y - 4, 22, MUTED, "left"));
+        hud.addPlaced(new Hud.Text(format(value), x + w, y - 4, 22, TEXT, "right"));
+        hud.addPlaced(new Hud.Box(x, trackY, w, 8, CONTROL, 4));
+        hud.addPlaced(new Hud.Box(x, trackY, w * amount, 8, ACCENT, 4));
         double knob = hovered || id.equals(holding) ? 22 : 18;
-        hud.add(new Hud.Box(x + w * amount - knob / 2, trackY + 4 - knob / 2, knob, knob, TEXT, knob / 2));
+        hud.addPlaced(new Hud.Box(x + w * amount - knob / 2, trackY + 4 - knob / 2, knob, knob, TEXT, knob / 2));
         return value;
     }
 
     /** A box that ticks on and off when clicked (with its label); returns the new value. */
     boolean checkbox(String label, double x, double y, boolean value) {
+        x += hud.originX(); // measured from the anchor (see Hud.anchor)
+        y += hud.originY();
         String id = "checkbox " + label + " " + Math.round(x) + "," + Math.round(y);
         double box = 28;
         double size = 24;
@@ -131,9 +139,9 @@ final class Ui {
         if (hovered && pressed) holding = id;
         if (released && hovered && id.equals(holding)) value = !value;
 
-        hud.add(new Hud.Box(x, y, box, box, value ? ACCENT : hovered ? HOVER : CONTROL, 7));
-        if (value) hud.add(new Hud.Box(x + 8, y + 8, box - 16, box - 16, DARK_TEXT, 3)); // a dot in the middle when ticked
-        hud.add(new Hud.Text(label, x + box + 12, y + (box - Hud.textHeight(size)) / 2, size, TEXT, "left"));
+        hud.addPlaced(new Hud.Box(x, y, box, box, value ? ACCENT : hovered ? HOVER : CONTROL, 7));
+        if (value) hud.addPlaced(new Hud.Box(x + 8, y + 8, box - 16, box - 16, DARK_TEXT, 3)); // a dot in the middle when ticked
+        hud.addPlaced(new Hud.Text(label, x + box + 12, y + (box - Hud.textHeight(size)) / 2, size, TEXT, "left"));
         return value;
     }
 

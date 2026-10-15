@@ -45,7 +45,7 @@ public final class ProjectList {
         }
     }
 
-    private static final Path FILE = Path.of(System.getenv().getOrDefault("APPDATA", System.getProperty("user.home")), "Sev7n", "projects.json");
+    private static final Path FILE = sev7n.Platform.dataFolder().resolve("projects.json");
 
     private final Path file;
     private final List<Entry> entries = new ArrayList<>();

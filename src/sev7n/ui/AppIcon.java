@@ -68,9 +68,15 @@ public final class AppIcon {
      * small sizes are stored as classic bitmaps (readable everywhere) and 256px as PNG.
      */
     public static void writeIco(Path file) throws IOException {
+        writeIco(file, null);
+    }
+
+    /** Like writeIco(file), but made from a picture (a game's own icon); null means the Sev7n logo. */
+    public static void writeIco(Path file, BufferedImage picture) throws IOException {
         List<byte[]> entries = new ArrayList<>();
         for (int size : SIZES) {
-            entries.add(size >= 256 ? png(render(size)) : bitmap(render(size)));
+            BufferedImage image = picture == null ? render(size) : fitted(picture, size);
+            entries.add(size >= 256 ? png(image) : bitmap(image));
         }
 
         int headerSize = 6 + 16 * SIZES.length;
@@ -97,6 +103,43 @@ public final class AppIcon {
 
         Files.createDirectories(file.toAbsolutePath().getParent());
         Files.write(file, ico.array());
+    }
+
+    /** A picture shrunk (smoothly) into a size x size square, keeping its shape, centered on a see-through background. */
+    public static BufferedImage fitted(BufferedImage picture, int size) {
+        BufferedImage out = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+        double scale = Math.min((double) size / picture.getWidth(), (double) size / picture.getHeight());
+        int w = Math.max(1, (int) Math.round(picture.getWidth() * scale));
+        int h = Math.max(1, (int) Math.round(picture.getHeight() * scale));
+        // shrink in halves first: one big jump makes small icons look grainy
+        BufferedImage step = picture;
+        while (step.getWidth() / 2 >= w && step.getHeight() / 2 >= h) {
+            BufferedImage half = new BufferedImage(step.getWidth() / 2, step.getHeight() / 2, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = half.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(step, 0, 0, half.getWidth(), half.getHeight(), null);
+            g.dispose();
+            step = half;
+        }
+        Graphics2D g = out.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.drawImage(step, (size - w) / 2, (size - h) / 2, w, h, null);
+        g.dispose();
+        return out;
+    }
+
+    /** A game's own icon for its windows (an exported game with an icon picked); null = the Sev7n logo. */
+    private static volatile BufferedImage windowIcon;
+
+    public static void useForWindows(BufferedImage picture) {
+        windowIcon = picture;
+    }
+
+    /** The window icon at a size: the game's own, if one was set, else the logo. */
+    public static BufferedImage windowIcon(int size) {
+        BufferedImage custom = windowIcon;
+        return custom == null ? render(size) : fitted(custom, size);
     }
 
     private static byte[] png(BufferedImage image) throws IOException {

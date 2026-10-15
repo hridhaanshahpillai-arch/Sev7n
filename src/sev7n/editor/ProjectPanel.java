@@ -85,7 +85,7 @@ final class ProjectPanel {
                     + "You can also drag files from Explorer onto the Sev7n window.");
         }
         ImGui.sameLine();
-        if (ImGui.button("Show in Explorer")) showInExplorer(folder);
+        if (ImGui.button("Show in " + sev7n.Platform.fileManager())) showInExplorer(folder);
         if (ctx.importing()) {
             ImGui.sameLine();
             ImGui.textColored(EditorStyle.pack(Theme.ACCENT), "Importing...");
@@ -172,6 +172,15 @@ final class ProjectPanel {
             folder = file;
             return;
         }
+        String fileName = file.getFileName().toString();
+        if (fileName.endsWith(".scene") && ctx.project.sceneName(file) != null) {
+            ctx.openScene(ctx.project.sceneName(file));
+            return;
+        }
+        if (fileName.endsWith(".prefab")) {
+            ctx.createFromPrefab(fileName.substring(0, fileName.length() - ".prefab".length()), new Vec3());
+            return;
+        }
         switch (AssetKind.of(file)) {
             case SCRIPT -> ctx.openScript(file, 0);
             case TEXTURE, MODEL -> ctx.createFromAsset(ctx.project.relative(file), new Vec3());
@@ -210,7 +219,7 @@ final class ProjectPanel {
         }
         if (kind.convertible() && ImGui.menuItem("Convert to .glb with Blender")) ctx.convertModel(file);
         if (kind.convertible() && Blender.find().isEmpty()) ImGui.textDisabled("(needs Blender: blender.org)");
-        if (ImGui.menuItem("Show in Explorer")) showInExplorer(file);
+        if (ImGui.menuItem("Show in " + sev7n.Platform.fileManager())) showInExplorer(file);
         ImGui.separator();
         if (ImGui.menuItem("Move to Recycle Bin")) recycle(file);
         ImGui.endPopup();
@@ -355,11 +364,8 @@ final class ProjectPanel {
         ImGui.endPopup();
     }
 
+    /** Shows a folder or file in Explorer (Finder on a Mac, the file manager on Linux). */
     static void showInExplorer(Path path) {
-        try {
-            new ProcessBuilder("explorer.exe", path.toString()).start();
-        } catch (IOException ignored) {
-            // nothing useful to do if Explorer won't start
-        }
+        sev7n.Platform.showInFileManager(path);
     }
 }

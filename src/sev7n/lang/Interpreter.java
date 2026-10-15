@@ -17,6 +17,7 @@ import sev7n.lang.runtime.Vectors;
 import sev7n.math.Vec3;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -152,6 +153,16 @@ public class Interpreter {
         return invoke(function, argList, 0);
     }
 
+    /**
+     * Calls a function value from inside a built-in that a script called (filter, sort...). Unlike
+     * callFunction it doesn't restart the infinite-loop counter, so a runaway loop is still caught.
+     */
+    public Object callNested(SevenCallable function, Object... args) {
+        List<Object> argList = new ArrayList<>(List.of(args));
+        if (function.maxArgs() >= 0 && argList.size() > function.maxArgs()) argList = argList.subList(0, function.maxArgs());
+        return invoke(function, argList, 0);
+    }
+
     public Object lookupGlobal(String name) {
         return globals.lookup(name);
     }
@@ -252,6 +263,12 @@ public class Interpreter {
                     if (!runLoopBody(loop, item)) return;
                 }
             }
+            case Map<?, ?> map -> {
+                // a map's keys (look the value up with map[key])
+                for (Object key : new ArrayList<>(map.keySet())) {
+                    if (!runLoopBody(loop, key)) return;
+                }
+            }
             case String s -> {
                 for (char c : s.toCharArray()) {
                     if (!runLoopBody(loop, String.valueOf(c))) return;
@@ -290,6 +307,7 @@ public class Interpreter {
             case Expr.Binary e -> evaluateBinary(e);
             case Expr.Logical e -> {
                 Object left = evaluate(e.left());
+                if (e.operator().type() == TokenType.QUESTION_QUESTION) yield left != null ? left : evaluate(e.right());
                 boolean isOr = e.operator().type() == TokenType.OR;
                 if (isOr == Values.isTruthy(left)) yield left;
                 yield evaluate(e.right());
@@ -307,7 +325,30 @@ public class Interpreter {
             case Expr.Range e -> new SevenRange(
                     number(evaluate(e.from()), e.operator()),
                     number(evaluate(e.to()), e.operator()));
+            case Expr.Conditional e -> Values.isTruthy(evaluate(e.condition())) ? evaluate(e.whenTrue()) : evaluate(e.whenFalse());
+            case Expr.Lambda e -> new SevenFunction(e.function(), environment);
+            case Expr.MapLiteral e -> {
+                Map<String, Object> map = new LinkedHashMap<>();
+                for (int i = 0; i < e.keys().size(); i++) map.put(e.keys().get(i), evaluate(e.values().get(i)));
+                yield map;
+            }
+            case Expr.Format e -> {
+                StringBuilder text = new StringBuilder();
+                for (Object part : e.parts()) text.append(part instanceof Expr x ? Values.stringify(evaluate(x)) : (String) part);
+                yield text.toString();
+            }
         };
+    }
+
+    /** Works out an expression in a given scope (used for parameter defaults). */
+    public Object evaluateIn(Expr expr, Environment scope) {
+        Environment previous = environment;
+        environment = scope;
+        try {
+            return evaluate(expr);
+        } finally {
+            environment = previous;
+        }
     }
 
     private Object evaluateUnary(Expr.Unary e) {
@@ -353,7 +394,19 @@ public class Interpreter {
             case LESS_EQUAL -> compare(left, right, op) <= 0;
             case GREATER -> compare(left, right, op) > 0;
             case GREATER_EQUAL -> compare(left, right, op) >= 0;
+            case IN -> contains(right, left, op);
             default -> throw new SevenError("Unknown operator '" + op.text() + "'", op.line());
+        };
+    }
+
+    /** 'item in container': an item of a list, a key of a map, a piece of a string, a number in a range. */
+    private boolean contains(Object container, Object item, Token op) {
+        return switch (container) {
+            case List<?> list -> list.stream().anyMatch(x -> Values.isEqual(x, item));
+            case Map<?, ?> map -> map.containsKey(Values.stringify(item));
+            case String s -> s.contains(Values.stringify(item));
+            case SevenRange r -> item instanceof Double d && (r.from() <= r.to() ? d >= r.from() && d < r.to() : d <= r.from() && d > r.to());
+            case null, default -> throw new SevenError("Can't look 'in' a " + Values.typeName(container) + ": use a list, map or string", op.line());
         };
     }
 
@@ -440,12 +493,24 @@ public class Interpreter {
         return switch (object) {
             case SevenObject o -> o.getProperty(name, line);
             case Vec3 v -> Vectors.get(v, name, line);
+            case Map<?, ?> map -> mapValue(map, name, line);
             case List<?> list when name.equals("length") -> (double) list.size();
             case String s when name.equals("length") -> (double) s.length();
-            case null, default -> throw new SevenError("A " + Values.typeName(object) + " has no property '" + name + "'", line);
+            case null -> throw new SevenError("Can't read '" + name + "' of none: the value is empty (was something not found, or destroyed?)", line);
+            default -> throw new SevenError("A " + Values.typeName(object) + " has no property '" + name + "'", line);
         };
     }
 
+    /** map.key and map["key"]: a missing key is an error that lists the keys there are. */
+    private static Object mapValue(Map<?, ?> map, String key, int line) {
+        if (map.containsKey(key)) return map.get(key);
+        String hint = Suggestions.closest(key, map.keySet().stream().map(String::valueOf).toList());
+        throw new SevenError("The map has no key '" + key + "'"
+                + (hint != null ? ". Did you mean '" + hint + "'?" : map.isEmpty() ? " (it's empty)" : " (it has " + map.keySet() + ")")
+                + " Check first with: if \"" + key + "\" in map", line);
+    }
+
+    @SuppressWarnings("unchecked")
     private Object evaluateSet(Expr.Set e) {
         Object object = evaluate(e.object());
         Object value = evaluate(e.value());
@@ -454,7 +519,9 @@ public class Interpreter {
         switch (object) {
             case SevenObject o -> o.setProperty(name, value, line);
             case Vec3 v -> Vectors.set(v, name, value, line);
-            case null, default -> throw new SevenError("Can't set '" + name + "' on a " + Values.typeName(object), line);
+            case Map<?, ?> map -> ((Map<String, Object>) map).put(name, value);
+            case null -> throw new SevenError("Can't set '" + name + "' on none: the value is empty (was something not found, or destroyed?)", line);
+            default -> throw new SevenError("Can't set '" + name + "' on a " + Values.typeName(object), line);
         }
         return value;
     }
@@ -465,6 +532,7 @@ public class Interpreter {
         return switch (object) {
             case List<?> list -> list.get(checkIndex(index, list.size(), e.bracket()));
             case String s -> String.valueOf(s.charAt(checkIndex(index, s.length(), e.bracket())));
+            case Map<?, ?> map -> mapValue(map, Values.stringify(index), e.bracket().line());
             case null, default -> throw new SevenError("Can't use [ ] on a " + Values.typeName(object), e.bracket().line());
         };
     }
@@ -472,8 +540,13 @@ public class Interpreter {
     @SuppressWarnings("unchecked")
     private Object evaluateIndexSet(Expr.IndexSet e) {
         Object object = evaluate(e.object());
+        if (object instanceof Map<?, ?> map) {
+            Object value = evaluate(e.value());
+            ((Map<String, Object>) map).put(Values.stringify(evaluate(e.index())), value);
+            return value;
+        }
         if (!(object instanceof List<?> list)) {
-            throw new SevenError("Can only set items on a list", e.bracket().line());
+            throw new SevenError("Can only set items on a list or map", e.bracket().line());
         }
         int i = checkIndex(evaluate(e.index()), list.size(), e.bracket());
         Object value = evaluate(e.value());

@@ -28,7 +28,7 @@ public class SevenFunction implements SevenCallable {
 
     @Override
     public int minArgs() {
-        return declaration.params().size();
+        return declaration.required();
     }
 
     @Override
@@ -40,7 +40,9 @@ public class SevenFunction implements SevenCallable {
     public Object call(Interpreter interpreter, List<Object> args, int line) {
         Environment scope = new Environment(closure);
         for (int i = 0; i < declaration.params().size(); i++) {
-            scope.define(declaration.params().get(i).text(), args.get(i));
+            // a left-out argument gets its default, worked out fresh each call (so vec3() is a new vector every time)
+            Object value = i < args.size() ? args.get(i) : interpreter.evaluateIn(declaration.defaults().get(i), scope);
+            scope.define(declaration.params().get(i).text(), value);
         }
         try {
             interpreter.executeBlock(declaration.body(), scope);

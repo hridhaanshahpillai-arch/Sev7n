@@ -25,6 +25,15 @@ final class Archives {
 
     private Archives() { }
 
+    /** 7-Zip, if it's installed: Program Files on Windows, or 7z / 7zz on macOS and Linux (Homebrew, the package manager). */
+    private static Path sevenZip() {
+        if (Files.exists(SEVEN_ZIP)) return SEVEN_ZIP;
+        for (String name : List.of("/opt/homebrew/bin/7zz", "/opt/homebrew/bin/7z", "/usr/local/bin/7zz", "/usr/local/bin/7z", "/usr/bin/7z", "/usr/bin/7zz")) {
+            if (Files.isRegularFile(Path.of(name))) return Path.of(name);
+        }
+        return null;
+    }
+
     static void extract(Path archive, Path destination) throws IOException {
         Files.createDirectories(destination);
         if (AssetKind.extension(archive).equals("zip")) unzip(archive, destination);
@@ -70,12 +79,13 @@ final class Archives {
             Path copy = work.resolve("archive." + AssetKind.extension(archive));
             Path out = Files.createDirectory(work.resolve("out"));
             Files.copy(archive, copy);
-            List<String> command = Files.exists(SEVEN_ZIP)
-                    ? List.of(SEVEN_ZIP.toString(), "x", "-y", "-o" + out, copy.toString())
-                    : List.of("tar.exe", "-xf", copy.toString(), "-C", out.toString());
+            Path sevenZip = sevenZip();
+            List<String> command = sevenZip != null
+                    ? List.of(sevenZip.toString(), "x", "-y", "-o" + out, copy.toString())
+                    : List.of(sev7n.Platform.program("tar"), "-xf", copy.toString(), "-C", out.toString()); // macOS tar reads .rar and .7z too
             Tools.Result result = Tools.run(command, 10);
             if (result.exitCode() != 0) {
-                String tool = command.get(0).endsWith("7z.exe") ? "7-Zip" : "Windows tar";
+                String tool = sevenZip != null ? "7-Zip" : "tar";
                 throw new IOException(tool + " couldn't unpack it: " + result.lastLine());
             }
             moveTree(out, destination);

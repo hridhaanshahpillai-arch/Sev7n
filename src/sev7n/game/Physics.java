@@ -46,6 +46,26 @@ final class Physics {
     // during a step: every solid collider, and where each entity's is in the list
     private List<WorldCollider> colliders = List.of();
     private List<Entity> stepTilemaps;
+    private List<Entity> stepTerrains = List.of();
+
+    /** Terrain: a body that sinks below the ground is put back on top of it, standing (and sliding less). */
+    private void keepAboveGround(Entity entity, Rigidbody body, double h) {
+        WorldCollider self = WorldCollider.of(entity);
+        if (self == null) return;
+        Vec3 p = entity.transform.position;
+        Box b = self.bounds();
+        double ground = Ground.heightAt(stepTerrains, (b.minX() + b.maxX()) / 2, (b.minZ() + b.maxZ()) / 2);
+        if (Double.isNaN(ground)) return;
+        double gap = b.minY() - ground;
+        if (gap > 0.02) return;
+        if (gap < 0) lockedAdd(p, new Vec3(0, -gap, 0), body);
+        if (body.velocity.y < 0) {
+            double bounced = -body.velocity.y * body.bounciness;
+            body.velocity.y = bounced < STOP_BOUNCING ? 0 : bounced;
+        }
+        body.grounded = true;
+        slowSliding(body, new Vec3(0, 1, 0), h);
+    }
     private final Map<Entity, Integer> colliderIndex = new HashMap<>();
 
     /** Brings an entity's collider in this step's list up to date after it moved. */
@@ -73,6 +93,7 @@ final class Physics {
             // every collider once per step; a body's entry is brought up to date whenever it moves
             colliders = new ArrayList<>(WorldCollider.all(scene, false));
             stepTilemaps = solidTilemaps(scene);
+            stepTerrains = Ground.terrains(scene);
             colliderIndex.clear();
             for (int c = 0; c < colliders.size(); c++) colliderIndex.put(colliders.get(c).entity(), c);
             for (Entity entity : bodies) {
@@ -85,11 +106,13 @@ final class Physics {
                 if (self == null || self.trigger()) fly(entity, body, h);
                 else if (self.round() == null) moveBox(entity, body, self.bounds(), colliders, scene, h);
                 else moveRound(entity, body, colliders, scene, h);
+                if (!stepTerrains.isEmpty() && self != null && !self.trigger()) keepAboveGround(entity, body, h);
                 refresh(entity);
             }
         }
         colliders = List.of();
         stepTilemaps = null;
+        stepTerrains = List.of();
         for (Entity entity : bodies) entity.get(Rigidbody.class).force.set(0, 0, 0);
     }
 
@@ -203,6 +226,33 @@ final class Physics {
     // ---------------------------------------------------------------- round bodies (sphere, capsule)
 
     private void moveRound(Entity entity, Rigidbody body, List<WorldCollider> colliders, Scene scene, double h) {
+        // fast and small (a ball fired from a cannon): move in pieces no longer than half its radius, so it can't skip through a thin wall
+        Round shape = WorldCollider.of(entity).round();
+        double travel = body.velocity.length() * h;
+        int pieces = shape == null || shape.radius() <= 0 ? 1 : (int) Math.min(16, Math.ceil(travel / (shape.radius() * 0.5)));
+        Vec3 start = entity.transform.position.copy();
+        for (int i = 0; i < Math.max(1, pieces); i++) moveRoundOnce(entity, body, colliders, scene, h / Math.max(1, pieces));
+        roll(entity, body, shape, entity.transform.position.minus(start));
+    }
+
+    /** A ball on the ground turns as it goes, as if it were rolling (a sphere's collider doesn't mind which way it's turned). */
+    private static void roll(Entity entity, Rigidbody body, Round shape, Vec3 moved) {
+        if (!body.rolls || !body.grounded || shape == null || shape.radius() <= 0 || shape.a().distance(shape.b()) > 1e-6) return;
+        Vec3 flat = new Vec3(moved.x, 0, moved.z);
+        double distance = flat.length();
+        if (distance < 1e-6) return;
+        Vec3 axis = new Vec3(0, 1, 0).cross(flat).normalized();
+        Matrix4f turned = new Matrix4f().rotate((float) (distance / shape.radius()), (float) axis.x, (float) axis.y, (float) axis.z)
+                .mul(rotationOnly(entity.transform));
+        entity.transform.setRotationFromMatrix(turned);
+    }
+
+    private static Matrix4f rotationOnly(sev7n.scene.Transform t) {
+        return new Matrix4f().rotateZ((float) Math.toRadians(t.rotation.z)).rotateY((float) Math.toRadians(t.rotation.y))
+                .rotateX((float) Math.toRadians(t.rotation.x));
+    }
+
+    private void moveRoundOnce(Entity entity, Rigidbody body, List<WorldCollider> colliders, Scene scene, double h) {
         Vec3 v = body.velocity;
         Vec3 p = entity.transform.position;
         p.set(p.x + v.x * h, p.y + v.y * h, p.z + v.z * h);
@@ -421,6 +471,12 @@ final class Physics {
                 best = new RayHit(collider.entity(), origin.plus(d.times(hit.distance())), hit.normal(), hit.distance());
             }
         }
+        List<Entity> terrains = Ground.terrains(scene);
+        double ground = Ground.rayDistance(terrains, origin, d, best == null ? maxDistance : best.distance());
+        if (!Double.isNaN(ground)) {
+            Vec3 at = origin.plus(d.times(ground));
+            best = new RayHit(Ground.terrainAt(terrains, at.x, at.z), at, Ground.normalAt(terrains, at.x, at.z), ground);
+        }
         Vec3 end = origin.plus(d.times(best == null ? maxDistance : best.distance()));
         Box along = new Box(Math.min(origin.x, end.x), Math.min(origin.y, end.y), Math.min(origin.z, end.z),
                 Math.max(origin.x, end.x), Math.max(origin.y, end.y), Math.max(origin.z, end.z)).grown(0.01);
@@ -451,6 +507,8 @@ final class Physics {
         for (WorldCollider collider : WorldCollider.all(scene, false)) {
             if (collider.touches(dot, 0)) return true;
         }
+        double ground = Ground.heightAt(Ground.terrains(scene), point.x, point.z);
+        if (!Double.isNaN(ground) && point.y <= ground) return true;
         return solidTileAt(scene, point);
     }
 

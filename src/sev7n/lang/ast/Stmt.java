@@ -21,7 +21,15 @@ public sealed interface Stmt {
     /** for item in list { }   or   for i in 0..10 { } */
     record For(Token variable, Expr iterable, Stmt body) implements Stmt { }
 
-    record Func(Token name, List<Token> params, List<Stmt> body) implements Stmt { }
+    /** 'defaults' has one entry per parameter: the value used when it's left out (func hurt(damage, from = vec3())), or null. */
+    record Func(Token name, List<Token> params, List<Expr> defaults, List<Stmt> body) implements Stmt {
+        /** How many arguments a call must give: the parameters before the first one with a default. */
+        public int required() {
+            int count = 0;
+            while (count < defaults.size() && defaults.get(count) == null) count++;
+            return count;
+        }
+    }
 
     record Return(Token keyword, Expr value) implements Stmt { }
 

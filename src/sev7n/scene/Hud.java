@@ -82,7 +82,13 @@ public final class Hud {
     private double aspect = 16 / 9.0;
     private final Matrix4f camera = new Matrix4f(); // world -> the screen's -1..1 square, as last drawn
 
+    /** Adds something at a position measured from the current anchor (see anchor()). */
     public void add(Item item) {
+        entries.add(new Entry(canvas == null && (originX != 0 || originY != 0) ? shifted(item, originX, originY) : item, canvas, glow));
+    }
+
+    /** Adds something whose position has already been measured from the anchor (see originX()). */
+    public void addPlaced(Item item) {
         entries.add(new Entry(item, canvas, glow));
     }
 
@@ -90,11 +96,58 @@ public final class Hud {
         return Collections.unmodifiableList(entries);
     }
 
-    /** Forgets everything drawn (before each frame's update), back to the screen without glow. */
+    /** Forgets everything drawn (before each frame's update), back to the screen without glow, anchored top left. */
     public void clear() {
         entries.clear();
         canvas = null;
         glow = false;
+        anchor = "topLeft";
+        originX = 0;
+        originY = 0;
+    }
+
+    // ---------------------------------------------------------------- anchors
+
+    /** The anchor names: where on the screen (0, 0) is, for everything drawn after anchor(name). */
+    public static final List<String> ANCHORS = List.of("topLeft", "top", "topRight", "left", "center", "right", "bottomLeft", "bottom", "bottomRight");
+
+    private String anchor = "topLeft";
+    private double originX;
+    private double originY;
+
+    /**
+     * Measures positions from a corner, an edge or the middle of the screen from now on, so a
+     * HUD fits any screen shape: anchor("bottomRight") then rect(-220, -80, 200, 60) is always
+     * 20 in from the bottom right corner. On a world canvas, anchors are ignored.
+     */
+    public void anchor(String name) {
+        if (!ANCHORS.contains(name)) throw new IllegalArgumentException("no anchor called \"" + name + "\". Use one of " + ANCHORS);
+        anchor = name;
+        originX = name.endsWith("Right") || name.equals("right") ? width() : name.equals("top") || name.equals("center") || name.equals("bottom") ? width() / 2 : 0;
+        originY = name.startsWith("bottom") ? HEIGHT : name.equals("left") || name.equals("center") || name.equals("right") ? HEIGHT / 2 : 0;
+    }
+
+    public String anchor() {
+        return anchor;
+    }
+
+    /** Where the current anchor is on the screen (0 when drawing on a world canvas). */
+    public double originX() {
+        return canvas == null ? originX : 0;
+    }
+
+    public double originY() {
+        return canvas == null ? originY : 0;
+    }
+
+    private static Item shifted(Item item, double dx, double dy) {
+        return switch (item) {
+            case Text t -> new Text(t.text(), t.x() + dx, t.y() + dy, t.size(), t.color(), t.align(), t.shadow());
+            case Box b -> new Box(b.x() + dx, b.y() + dy, b.width(), b.height(), b.color(), b.radius());
+            case Picture p -> new Picture(p.path(), p.x() + dx, p.y() + dy, p.width(), p.height(), p.tint());
+            case Line l -> new Line(l.x1() + dx, l.y1() + dy, l.x2() + dx, l.y2() + dy, l.thickness(), l.color());
+            case Circle c -> new Circle(c.x() + dx, c.y() + dy, c.radius(), c.thickness(), c.color());
+        };
     }
 
     /** From now on, draw on a canvas in the world (null: back to the screen). */

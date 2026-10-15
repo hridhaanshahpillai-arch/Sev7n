@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
  *   color      ->  java.awt.Color
  *   vec3       ->  sev7n.math.Vec3
  *   list       ->  java.util.List
+ *   map        ->  java.util.Map (String keys, in the order they were added)
  *   range      ->  SevenRange
  *   function   ->  SevenCallable
  *   objects    ->  SevenObject (styles, behaviours, engine entities...)
@@ -46,6 +47,7 @@ public final class Values {
             case Color c -> "color";
             case Vec3 v -> "vec3";
             case List<?> l -> "list";
+            case java.util.Map<?, ?> m -> "map";
             case SevenRange r -> "range";
             case SevenCallable f -> "function";
             case BehaviourClass b -> "behaviour";
@@ -62,6 +64,9 @@ public final class Values {
                     ? String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue())
                     : String.format("#%02x%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue(), c.getAlpha());
             case List<?> list -> list.stream().map(Values::stringify).collect(Collectors.joining(", ", "[", "]"));
+            case java.util.Map<?, ?> map -> map.entrySet().stream()
+                    .map(e -> e.getKey() + ": " + (e.getValue() instanceof String s ? '"' + s + '"' : stringify(e.getValue())))
+                    .collect(Collectors.joining(", ", "{", "}"));
             case SevenCallable f -> "<func " + f.name() + ">";
             default -> value.toString();
         };

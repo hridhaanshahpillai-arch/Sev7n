@@ -53,6 +53,8 @@ final class GameViewPanel {
         ImGui.end();
     }
 
+    private boolean cursorCaptured; // the cursor is hidden for mouse-look
+
     private void drawView() {
         ImVec2 origin = ImGui.getCursorScreenPos();
         float width = ImGui.getContentRegionAvailX();
@@ -80,8 +82,30 @@ final class GameViewPanel {
         if (ctx.playing()) {
             ImVec2 mouse = ImGui.getMousePos();
             ctx.input.setViewSize(width, height);
-            ctx.input.mouseMoved(mouse.x - origin.x, mouse.y - origin.y);
-            ctx.input.mouseButton(focused && hovered && ImGui.isMouseDown(0));
+            boolean locked = focused && ctx.input.mouseLocked();
+            long window = org.lwjgl.glfw.GLFW.glfwGetCurrentContext();
+            if (locked) {
+                // mouse-look: the cursor is hidden and put back in the middle of the view each frame; how far it went is the movement
+                // (ImGui stops reporting a hidden cursor, so ask GLFW where it is: window coordinates, like ImGui's)
+                ImVec2 windowPos = ImGui.getMainViewport().getPos();
+                double cx = origin.x - windowPos.x + width / 2.0, cy = origin.y - windowPos.y + height / 2.0;
+                double[] px = new double[1], py = new double[1];
+                org.lwjgl.glfw.GLFW.glfwGetCursorPos(window, px, py);
+                if (cursorCaptured) ctx.input.addMouseMove(px[0] - cx, py[0] - cy);
+                org.lwjgl.glfw.GLFW.glfwSetInputMode(window, org.lwjgl.glfw.GLFW.GLFW_CURSOR, org.lwjgl.glfw.GLFW.GLFW_CURSOR_DISABLED);
+                org.lwjgl.glfw.GLFW.glfwSetCursorPos(window, cx, cy);
+                ctx.input.mouseMoved(width / 2, height / 2);
+                cursorCaptured = true;
+            } else {
+                if (cursorCaptured) {
+                    org.lwjgl.glfw.GLFW.glfwSetInputMode(window, org.lwjgl.glfw.GLFW.GLFW_CURSOR, org.lwjgl.glfw.GLFW.GLFW_CURSOR_NORMAL);
+                    ctx.input.forgetMousePosition();
+                    cursorCaptured = false;
+                }
+                ctx.input.mouseMoved(mouse.x - origin.x, mouse.y - origin.y);
+            }
+            ctx.input.mouseButton(focused && (hovered || locked) && ImGui.isMouseDown(0));
+            ctx.input.rightMouseButton(focused && (hovered || locked) && ImGui.isMouseDown(1));
             if (focused) {
                 // a purple frame shows the game has the keyboard
                 ImGui.getWindowDrawList().addRect(origin.x + 1, origin.y + 1, origin.x + width - 1, origin.y + height - 1,

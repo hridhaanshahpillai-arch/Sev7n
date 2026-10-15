@@ -50,7 +50,14 @@ final class Sound {
 
     /** Plays a sound once. 'volume' 1 = as recorded, 0.5 = quieter, 0 = silent. Throws with a readable message if the file can't be played. */
     void play(String path, double volume) {
+        play(path, volume, 0);
+    }
+
+    /** Plays a sound once, 'pan' -1 (all left) to 1 (all right), 0 in the middle. */
+    void play(String path, double volume, double pan) {
+        if (volume * masterVolume <= 0.001) return; // too far away (or muted) to hear
         Clip clip = open(path, volume * masterVolume);
+        setPan(clip, pan);
         clip.addLineListener(event -> {
             if (event.getType() == LineEvent.Type.STOP) clip.close();
         });
@@ -120,6 +127,30 @@ final class Sound {
         } catch (Exception e) {
             throw new IllegalArgumentException("can't read the sound '" + path + "' (use .wav files): " + e.getMessage());
         }
+    }
+
+    /** Left / right: mono sounds have a pan control, stereo ones a balance control (some sound cards have neither). */
+    private static void setPan(Clip clip, double pan) {
+        if (pan == 0) return;
+        FloatControl.Type type = clip.isControlSupported(FloatControl.Type.PAN) ? FloatControl.Type.PAN
+                : clip.isControlSupported(FloatControl.Type.BALANCE) ? FloatControl.Type.BALANCE : null;
+        if (type == null) return;
+        FloatControl control = (FloatControl) clip.getControl(type);
+        control.setValue((float) Math.max(control.getMinimum(), Math.min(control.getMaximum(), pan)));
+    }
+
+    /**
+     * How loud and where (left/right) a sound at 'source' is for a listener at 'ear' facing with
+     * 'right' to its right: full volume up close, fading to nothing at 'range'.
+     */
+    static double[] placed(sev7n.math.Vec3 source, sev7n.math.Vec3 ear, sev7n.math.Vec3 right, double range) {
+        sev7n.math.Vec3 toSound = source.minus(ear);
+        double distance = toSound.length();
+        double near = Math.min(2, range * 0.1); // inside this it's full volume
+        double fade = distance <= near ? 1 : Math.max(0, 1 - (distance - near) / Math.max(0.001, range - near));
+        double volume = fade * fade; // falls off quickly, then trails away, like real sound
+        double pan = distance < 0.001 ? 0 : Math.max(-1, Math.min(1, toSound.times(1 / distance).dot(right))) * Math.min(1, distance / near) * 0.8;
+        return new double[] {volume, pan};
     }
 
     private static void setVolume(Clip clip, double volume) {

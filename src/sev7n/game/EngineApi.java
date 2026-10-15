@@ -10,12 +10,14 @@ import sev7n.scene.MeshRenderer;
 import sev7n.scene.ParticleEmitter;
 
 import java.awt.Color;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Global functions scripts get from the engine (on top of the core library):
- *   input:   key, keyPressed, keyReleased, mouseX, mouseY, mouseDown, mouseClicked
+ *   input:   key, keyPressed, keyReleased, mouseX, mouseY, mouseDown([button]), mouseClicked([button]),
+ *            lockMouse(on), mouseLocked(), mouseMoveX(), mouseMoveY()
  *   scene:   find(name), findAll(tag), spawn(mesh or model path, [position]), spawnEffect(preset, [position])
  *   time:    time()
  *   tweens:  tween(entity, property, to, seconds, [easing], [whenDone]), stopTweens(entity, [property])
@@ -25,6 +27,8 @@ import java.util.List;
  *            panel(x, y, w, h, [color]), textWidth(text, [size]), uiMouseX(), uiMouseY(), mouseOverUi()
  *   in-world UI: beginWorld(position, [yaw], [scale]), endWorld(), setGlow(on), worldToScreen(point),
  *            line(...), circle(...), ring(...), frame(...), brackets(...), segmentBar(...), keyIcon(key, x, y, [size])
+ *   scenes:  loadScene(name), sceneName(), setValue(key, v), getValue(key, [default]), saveGame([slot]), loadGame([slot]),
+ *            hasSave([slot]), deleteSave([slot]), spawnPrefab(name, [position])
  *   game:    setTimeScale(s), timeScale(), restart(), quit()
  *   sound:   playSound(path, [volume]), playMusic(path, [volume]), stopMusic(), setVolume(v), volume()
  *   NPCs:    makeNoise(position, [loudness], [source]), hour(), setHour(h), dayLength(), setDayLength(seconds)
@@ -45,6 +49,67 @@ final class EngineApi {
         installUi(seven, game);
         installWorldUi(seven, game);
         installSound(seven, game);
+        installScenes(seven, game);
+    }
+
+    /** Levels, saved games, values kept between them, and prefabs. */
+    private static void installScenes(Interpreter seven, Game game) {
+        // loadScene("Level2"): switches to another scene at the end of this frame (values from setValue come along);
+        // loadScene("Level2", 0.5): fades to black over half a second first, and the new scene fades in
+        seven.defineNative("loadScene", 1, 2, args -> {
+            game.requestScene(args.string(0), args.has(1) ? args.number(1) : 0);
+            return null;
+        });
+        // reloadScene([fade]): starts this scene again (values from setValue are kept, unlike restart())
+        seven.defineNative("reloadScene", 0, 1, args -> {
+            game.requestScene(game.sceneName(), args.has(0) ? args.number(0) : 0);
+            return null;
+        });
+        seven.defineNative("sceneName", 0, 0, args -> game.sceneName());
+        // sceneNames(): every scene in the project, "Main" first (for level select menus)
+        seven.defineNative("sceneNames", 0, 0, args -> new ArrayList<Object>(game.sceneNames()));
+        // setValue/getValue: remembered across scenes, and saved with saveGame (score, unlocked levels, settings)
+        seven.defineNative("setValue", 2, 2, args -> {
+            game.values().put(args.string(0), args.get(1));
+            return null;
+        });
+        seven.defineNative("getValue", 1, 2, args -> {
+            Object value = game.values().get(args.string(0));
+            return value != null ? value : args.has(1) ? args.get(1) : null;
+        });
+        // saveGame([slot]): everything about the game right now (every object, every script's variables, values)
+        seven.defineNative("saveGame", 0, 1, args -> {
+            try {
+                game.saveGame(args.has(0) ? args.string(0) : "save");
+            } catch (IOException e) {
+                throw args.error("couldn't save the game: " + e.getMessage());
+            }
+            return null;
+        });
+        // loadGame([slot]): puts it all back at the end of this frame; false if there's no such save
+        seven.defineNative("loadGame", 0, 1, args -> {
+            try {
+                return game.loadGame(args.has(0) ? args.string(0) : "save");
+            } catch (IOException | IllegalArgumentException e) {
+                throw args.error("couldn't load the game: " + e.getMessage());
+            }
+        });
+        seven.defineNative("hasSave", 0, 1, args -> game.hasSave(args.has(0) ? args.string(0) : "save"));
+        seven.defineNative("deleteSave", 0, 1, args -> {
+            try {
+                return game.deleteSave(args.has(0) ? args.string(0) : "save");
+            } catch (IOException e) {
+                throw args.error("couldn't delete the save: " + e.getMessage());
+            }
+        });
+        // spawnPrefab("Zombie", [position]): a copy of a saved object, behaviours and all
+        seven.defineNative("spawnPrefab", 1, 2, args -> {
+            try {
+                return game.spawnPrefab(args.string(0), args.has(1) ? args.vec3(1) : new Vec3());
+            } catch (IOException e) {
+                throw args.error(e.getMessage());
+            }
+        });
     }
 
     /**
@@ -68,8 +133,20 @@ final class EngineApi {
             hud.setGlow(Values.isTruthy(args.get(0)));
             return null;
         });
-        // worldToScreen(point): where something in the world shows on the screen (x, y), or none if it's behind the camera
-        seven.defineNative("worldToScreen", 1, 1, args -> hud.worldToScreen(args.vec3(0)));
+        // worldToScreen(point): where something in the world shows on the screen (x, y, measured from the anchor), or none if it's behind the camera
+        seven.defineNative("worldToScreen", 1, 1, args -> {
+            Vec3 at = hud.worldToScreen(args.vec3(0));
+            return at == null ? null : new Vec3(at.x - hud.originX(), at.y - hud.originY(), 0);
+        });
+        // anchor("bottomRight"): positions are measured from that corner (or edge, or the center) from now on, so a HUD fits any screen
+        seven.defineNative("anchor", 1, 1, args -> {
+            try {
+                hud.anchor(args.string(0));
+            } catch (IllegalArgumentException e) {
+                throw args.error(e.getMessage());
+            }
+            return null;
+        });
         seven.defineNative("line", 4, 6, args -> {
             hud.add(new Hud.Line(args.number(0), args.number(1), args.number(2), args.number(3),
                     args.has(4) ? args.number(4) : 2, color(args, 5, TEXT)));
@@ -155,8 +232,8 @@ final class EngineApi {
             return null;
         });
         seven.defineNative("textWidth", 1, 2, args -> Hud.textWidth(Values.stringify(args.get(0)), args.has(1) ? args.number(1) : 32));
-        seven.defineNative("uiMouseX", 0, 0, args -> ui.mouseX());
-        seven.defineNative("uiMouseY", 0, 0, args -> ui.mouseY());
+        seven.defineNative("uiMouseX", 0, 0, args -> ui.mouseX() - game.scene().hud.originX());
+        seven.defineNative("uiMouseY", 0, 0, args -> ui.mouseY() - game.scene().hud.originY());
         seven.defineNative("mouseOverUi", 0, 0, args -> ui.mouseOverUi());
         // the world's clock: 0 freezes everything but scripts (pause menus), 0.3 is slow motion
         seven.defineNative("setTimeScale", 1, 1, args -> {
@@ -218,6 +295,21 @@ final class EngineApi {
         seven.defineNative("playSound", 1, 2, args -> {
             try {
                 game.sound().play(args.string(0), args.has(1) ? args.number(1) : 1);
+            } catch (IllegalArgumentException e) {
+                throw args.error(e.getMessage());
+            }
+            return null;
+        });
+        // playSoundAt(path, position, [volume], [range]): a sound somewhere in the world, quieter further from the camera
+        // (silent past 'range', 30 if left out) and coming from the left or right
+        seven.defineNative("playSoundAt", 2, 4, args -> {
+            Entity listener = game.scene().mainCamera();
+            double volume = args.has(2) ? args.number(2) : 1;
+            double range = args.has(3) ? args.number(3) : 30;
+            double[] placed = listener == null ? new double[] {1, 0}
+                    : Sound.placed(args.vec3(1), listener.transform.position, listener.transform.right(), range);
+            try {
+                game.sound().play(args.string(0), volume * placed[0], placed[1]);
             } catch (IllegalArgumentException e) {
                 throw args.error(e.getMessage());
             }
@@ -314,8 +406,17 @@ final class EngineApi {
         seven.defineNative("keyReleased", 1, 1, args -> input.wasReleased(args.string(0)));
         seven.defineNative("mouseX", 0, 0, args -> input.mouseX());
         seven.defineNative("mouseY", 0, 0, args -> input.mouseY());
-        seven.defineNative("mouseDown", 0, 0, args -> input.isMouseDown());
-        seven.defineNative("mouseClicked", 0, 0, args -> input.wasMouseClicked());
+        // mouseDown([button]) / mouseClicked([button]): 0 (or left out) = left button, 1 = right
+        seven.defineNative("mouseDown", 0, 1, args -> args.has(0) && args.number(0) == 1 ? input.isRightMouseDown() : input.isMouseDown());
+        seven.defineNative("mouseClicked", 0, 1, args -> args.has(0) && args.number(0) == 1 ? input.wasRightMouseClicked() : input.wasMouseClicked());
+        // mouse-look: lockMouse(true) hides the cursor and keeps it in the game; mouseMoveX/Y say how far it moved this frame
+        seven.defineNative("lockMouse", 1, 1, args -> {
+            input.setMouseLocked(Values.isTruthy(args.get(0)));
+            return null;
+        });
+        seven.defineNative("mouseLocked", 0, 0, args -> input.mouseLocked());
+        seven.defineNative("mouseMoveX", 0, 0, args -> input.mouseMoveX());
+        seven.defineNative("mouseMoveY", 0, 0, args -> input.mouseMoveY());
     }
 
     private static void installScene(Interpreter seven, Game game) {

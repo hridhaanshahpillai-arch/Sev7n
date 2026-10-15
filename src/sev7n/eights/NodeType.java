@@ -9,8 +9,11 @@ import java.util.List;
  */
 public final class NodeType {
 
+    /** Groups in the Add Node menu, in the order shown. */
     public enum Category {
-        EVENTS("Events"), FLOW("Flow"), ACTIONS("Actions"), VALUES("Values"), MATH("Math & Logic"), VARIABLES("Variables");
+        EVENTS("Events"), FLOW("Flow"), ACTIONS("Objects"), PHYSICS("Physics"), INPUT("Input"),
+        CHARACTERS("Characters & NPCs"), HUD("HUD & UI"), SOUND("Sound"), SCENES("Scenes & Saves"),
+        WORLD("World & Effects"), VALUES("Values"), MATH("Math & Logic"), TEXT("Text & Lists"), VARIABLES("Variables");
 
         public final String label;
 
@@ -31,6 +34,23 @@ public final class NodeType {
         String of(Compiler.Context code, Node node, int output);
     }
 
+    /**
+     * Where an event's chain runs: a behaviour function such as onSee(other).
+     * 'prelude' is a line written first (e.g. "_dt = dt"), or "".
+     */
+    public record EventFunction(String name, String params, String prelude) { }
+
+    @FunctionalInterface
+    public interface EventPlacement {
+        EventFunction of(Compiler.Context code, Node node);
+    }
+
+    /** Variables a node keeps between frames (a timer, a "done once" flag), as "var" lines; names should include the node id. */
+    @FunctionalInterface
+    public interface Fields {
+        List<String> of(Node node);
+    }
+
     public final String id;
     public final String title;
     public final Category category;
@@ -40,6 +60,15 @@ public final class NodeType {
     public final boolean usesVariable;
     final Statement statement;
     final Expression expression;
+    /** Events that get a function of their own (On See, On Message...). */
+    final EventPlacement event;
+    /** Events that run inside update(dt), wrapped in a check (On Key Pressed, Every N Seconds...): writes the whole block. */
+    final Statement inUpdate;
+    final Fields fields;
+    /** Extra code some nodes add to update(dt), wherever they are (Delay counts down there). */
+    final Statement everyFrame;
+    /** Search words besides the title, e.g. "if" for Branch. */
+    public final String keywords;
 
     private NodeType(Builder b) {
         this.id = b.id;
@@ -51,6 +80,11 @@ public final class NodeType {
         this.usesVariable = b.usesVariable;
         this.statement = b.statement;
         this.expression = b.expression;
+        this.event = b.event;
+        this.inUpdate = b.inUpdate;
+        this.fields = b.fields;
+        this.everyFrame = b.everyFrame;
+        this.keywords = b.keywords;
     }
 
     public boolean isEvent() {
@@ -72,6 +106,11 @@ public final class NodeType {
         private boolean usesVariable;
         private Statement statement;
         private Expression expression;
+        private EventPlacement event;
+        private Statement inUpdate;
+        private Fields fields;
+        private Statement everyFrame;
+        private String keywords = "";
 
         private Builder(String id, String title, Category category) {
             this.id = id;
@@ -116,6 +155,31 @@ public final class NodeType {
 
         Builder value(Expression e) {
             expression = e;
+            return this;
+        }
+
+        Builder event(EventPlacement placement) {
+            event = placement;
+            return this;
+        }
+
+        Builder inUpdate(Statement s) {
+            inUpdate = s;
+            return this;
+        }
+
+        Builder fields(Fields f) {
+            fields = f;
+            return this;
+        }
+
+        Builder everyFrame(Statement s) {
+            everyFrame = s;
+            return this;
+        }
+
+        Builder keywords(String words) {
+            keywords = words;
             return this;
         }
 

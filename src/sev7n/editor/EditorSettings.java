@@ -13,7 +13,7 @@ import java.util.Map;
 final class EditorSettings {
 
     private static final Path FILE = Path.of(
-            System.getenv().getOrDefault("APPDATA", System.getProperty("user.home")), "Sev7n", "settings.json");
+            sev7n.Platform.dataFolder().toString(), "settings.json");
 
     /** The editor's frame rate limit: 0 = unlimited. */
     int maxFps = 0;

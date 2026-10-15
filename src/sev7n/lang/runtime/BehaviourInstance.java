@@ -28,9 +28,30 @@ public final class BehaviourInstance implements SevenObject {
         return scope.getLocal(name) instanceof SevenCallable method ? method : null;
     }
 
+    /** The behaviour's own variables and their values now (not its functions, or the engine's entity and transform). */
+    public java.util.Map<String, Object> fields() {
+        java.util.Map<String, Object> fields = new java.util.LinkedHashMap<>();
+        for (String name : scope.names()) {
+            Object value = scope.getLocal(name);
+            if (value instanceof SevenCallable || name.equals("entity") || name.equals("transform")) continue;
+            fields.put(name, value);
+        }
+        return fields;
+    }
+
+    /** Sets one of its variables, if it has it (loading a saved game). */
+    public void setField(String name, Object value) {
+        if (scope.hasLocal(name) && !(scope.getLocal(name) instanceof SevenCallable)) scope.define(name, value);
+    }
+
     @Override
     public String typeName() {
         return type.name();
+    }
+
+    @Override
+    public java.util.Collection<String> propertyNames() {
+        return scope.names();
     }
 
     @Override

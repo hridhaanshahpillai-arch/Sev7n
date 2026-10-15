@@ -14,10 +14,11 @@ public enum ValueType {
     VEC3("Vec3", new Color(0xE7EE98)),
     COLOR("Color", new Color(0xD0B8F4)),
     ENTITY("Entity", new Color(0x97E1F1)),
+    LIST("List", new Color(0xB5F4C6)),
     ANY("Any", new Color(0xA9ABB6));
 
     /** Types a graph variable can have. */
-    public static final ValueType[] VARIABLE_TYPES = {NUMBER, BOOL, STRING, VEC3, COLOR};
+    public static final ValueType[] VARIABLE_TYPES = {NUMBER, BOOL, STRING, VEC3, COLOR, ENTITY, LIST};
 
     public final String label;
     public final Color color;
@@ -35,7 +36,8 @@ public enum ValueType {
             case STRING -> "";
             case VEC3 -> new Vec3();
             case COLOR -> new Color(0xBF9EEE);
-            case EXEC, ENTITY -> null; // an unconnected entity input means "this object"
+            case LIST -> new java.util.ArrayList<>(); // variables start as an empty list
+            case EXEC, ENTITY -> null; // an unconnected entity input means "this object"; an entity variable starts as none
         };
     }
 

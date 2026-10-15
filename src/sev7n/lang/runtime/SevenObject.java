@@ -20,7 +20,14 @@ public interface SevenObject {
         throw new SevenError("'" + name + "' on a " + typeName() + " can't be changed", line);
     }
 
+    /** The names scripts can use after the dot, for "did you mean ...?" (empty if unknown). */
+    default java.util.Collection<String> propertyNames() {
+        return java.util.List.of();
+    }
+
     default SevenError noSuchProperty(String name, int line) {
-        return new SevenError("A " + typeName() + " has no property '" + name + "'", line);
+        String hint = sev7n.lang.Suggestions.closest(name, propertyNames());
+        String article = "aeiou".indexOf(Character.toLowerCase(typeName().charAt(0))) >= 0 ? "An " : "A ";
+        return new SevenError(article + typeName() + " has no property '" + name + "'" + (hint == null ? "" : ". Did you mean '" + hint + "'?"), line);
     }
 }

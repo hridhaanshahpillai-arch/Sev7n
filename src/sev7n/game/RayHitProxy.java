@@ -30,6 +30,11 @@ final class RayHitProxy implements SevenObject {
     }
 
     @Override
+    public java.util.Collection<String> propertyNames() {
+        return java.util.List.of("entity", "point", "normal", "distance");
+    }
+
+    @Override
     public Object getProperty(String name, int line) {
         return switch (name) {
             case "entity" -> entity;

@@ -423,6 +423,7 @@ final class NpcBrain {
     private void stopWalking() {
         path.clear();
         moving = false;
+        walkVelocity.set(0, 0, 0); // told to stop: it stops
         Rigidbody body = self.get(Rigidbody.class);
         if (body != null && !body.kinematic) {
             body.velocity.x = 0;
@@ -459,16 +460,29 @@ final class NpcBrain {
 
         moving = !path.isEmpty();
         double speed = running ? npc.runSpeed : npc.speed;
-        Vec3 velocity = new Vec3();
+        Vec3 wanted = new Vec3();
         if (moving) {
             Vec3 to = path.get(0).minus(position);
             to.y = 0;
-            velocity = to.normalized().plus(avoidOthers(scene).times(0.8));
-            velocity.y = 0;
-            velocity = velocity.length() > 0 ? velocity.normalized().times(speed) : velocity;
-            face(velocity, npc.turnSpeed * dt);
+            wanted = to.normalized().plus(avoidOthers(scene).times(0.8));
+            if (sidestepTimer > 0) {
+                sidestepTimer -= dt;
+                wanted = wanted.plus(sidestep.times(1.2)); // stuck on something: edge round it
+            }
+            wanted.y = 0;
+            // slower round sharp corners, so it doesn't run wide while it turns
+            double facing = Math.toRadians(self.transform.rotation.y);
+            Vec3 ahead = new Vec3(-Math.sin(facing), 0, -Math.cos(facing));
+            double turnSlowdown = wanted.length() > 0 ? 0.45 + 0.55 * Math.max(0, ahead.dot(wanted.normalized())) : 1;
+            wanted = wanted.length() > 0 ? wanted.normalized().times(speed * turnSlowdown) : wanted;
+            face(wanted, npc.turnSpeed * dt);
             checkStuck(dt);
         }
+        // speed up and slow down over a moment instead of all at once (no sliding starts and stops)
+        double acceleration = Math.max(speed, 1) * 8;
+        walkVelocity.set(walkVelocity.moveTowards(wanted, acceleration * dt));
+        if (!moving && walkVelocity.length() < 0.05) walkVelocity.set(0, 0, 0);
+        Vec3 velocity = walkVelocity.copy();
         if (physical) {
             body.velocity.x = velocity.x;
             body.velocity.z = velocity.z;
@@ -499,14 +513,34 @@ final class NpcBrain {
         return push;
     }
 
-    /** If it's barely moved for a while, it's stuck on something: find a new path. */
+    /**
+     * If it's barely moved for a while, it's stuck on something: find a new path. Stuck again
+     * straight after (on another character, or a box that isn't in the map): step to one side for a moment.
+     */
     private void checkStuck(double dt) {
         stuckTimer += dt;
         if (stuckTimer < 1) return;
-        if (flatDistance(stuckCheck, self.transform.position) < 0.1) needsPath = true;
+        if (flatDistance(stuckCheck, self.transform.position) < 0.1) {
+            needsPath = true;
+            if (++stuckCount >= 2 && !path.isEmpty()) {
+                Vec3 to = path.get(0).minus(self.transform.position);
+                Vec3 side = new Vec3(-to.z, 0, to.x);
+                if (side.length() > 1e-6) {
+                    sidestep.set(side.normalized().times(Math.random() < 0.5 ? 1 : -1));
+                    sidestepTimer = 0.7;
+                }
+            }
+        } else {
+            stuckCount = 0;
+        }
         stuckCheck.set(self.transform.position);
         stuckTimer = 0;
     }
+
+    private int stuckCount;
+    private final Vec3 sidestep = new Vec3();
+    private double sidestepTimer;
+    private final Vec3 walkVelocity = new Vec3();
 
     /** Turns toward a direction (flat), by at most 'maxDegrees'. */
     private void face(Vec3 direction, double maxDegrees) {

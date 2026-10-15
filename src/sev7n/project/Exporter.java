@@ -42,7 +42,7 @@ public final class Exporter {
 
     /** The JDK tool that builds a standalone app, or null if this Java doesn't have it. */
     public static Path jpackage() {
-        Path tool = Path.of(System.getProperty("java.home"), "bin", "jpackage.exe");
+        Path tool = Path.of(System.getProperty("java.home"), "bin", sev7n.Platform.program("jpackage"));
         return Files.isRegularFile(tool) ? tool : null;
     }
 
@@ -57,7 +57,22 @@ public final class Exporter {
      * to start the game with.
      */
     public Path export(String gameName, Path destination, boolean includeJava) throws IOException {
+        return export(gameName, destination, includeJava, null);
+    }
+
+    /**
+     * Like export(...), with a picture from the project as the game's icon (its .exe and its
+     * window), e.g. "assets/textures/icon.png"; null keeps the Sev7n logo.
+     */
+    public Path export(String gameName, Path destination, boolean includeJava, String iconPath) throws IOException {
         String name = fileName(gameName);
+        java.awt.image.BufferedImage icon = null;
+        if (iconPath != null && !iconPath.isBlank()) {
+            Path iconFile = project.root().resolve(iconPath);
+            if (!Files.isRegularFile(iconFile)) throw new IOException("the icon " + iconPath + " isn't in the project any more: pick another one");
+            icon = javax.imageio.ImageIO.read(iconFile.toFile());
+            if (icon == null) throw new IOException("the icon " + iconPath + " isn't a picture Java can read (use a PNG)");
+        }
         if (Files.exists(destination) && !Files.exists(destination.resolve(MARKER))) {
             throw new IOException(destination + " already exists and isn't an earlier export, so it won't be replaced");
         }
@@ -70,25 +85,47 @@ public final class Exporter {
             copyGame(input.resolve("game"));
             Map<String, Object> info = new LinkedHashMap<>();
             info.put("name", gameName);
+            if (icon != null) info.put("icon", "game/" + iconPath.replace('\\', '/')); // the window uses it too
             Files.writeString(input.resolve(MARKER), Json.write(info), StandardCharsets.UTF_8);
 
             Path built;
             Path start;
             if (includeJava) {
                 progress.accept("Packing Java with the game (this takes a minute)...");
-                built = packageWithJava(name, input, staging);
-                start = destination.resolve(name + ".exe");
+                built = packageWithJava(name, input, staging, icon);
+                // what jpackage makes: Name.exe on Windows, Name.app on a Mac, bin/Name on Linux
+                start = switch (sev7n.Platform.OS) {
+                    case WINDOWS -> destination.resolve(name + ".exe");
+                    case MAC -> destination.resolve(name + ".app");
+                    case LINUX -> destination.resolve("bin").resolve(name);
+                };
                 Files.copy(input.resolve(MARKER), built.resolve(MARKER)); // marks the top folder too
-            } else {
+            } else if (sev7n.Platform.windows()) {
                 Files.writeString(input.resolve("Play.bat"),
                         "@echo off\r\nstart \"\" javaw -jar \"%~dp0sev7n.jar\"\r\n", StandardCharsets.US_ASCII);
                 built = input;
                 start = destination.resolve("Play.bat");
+            } else {
+                // a shell script for macOS and Linux (a Mac needs Java to open windows on its first thread)
+                Files.writeString(input.resolve("play.sh"), """
+                        #!/bin/sh
+                        cd "$(dirname "$0")"
+                        if [ "$(uname)" = "Darwin" ]; then exec java -XstartOnFirstThread -jar sev7n.jar; else exec java -jar sev7n.jar; fi
+                        """, StandardCharsets.US_ASCII);
+                built = input;
+                start = destination.resolve("play.sh");
             }
 
             if (Files.exists(destination)) Archives.deleteTree(destination);
             Files.createDirectories(destination.getParent());
-            AssetImporter.copyTree(built, destination);
+            if (includeJava && sev7n.Platform.mac()) {
+                // a Mac app is a folder called Name.app; the export folder holds it (and the marker)
+                AssetImporter.copyTree(built, start);
+                Files.copy(input.resolve(MARKER), destination.resolve(MARKER));
+            } else {
+                AssetImporter.copyTree(built, destination);
+            }
+            if (!sev7n.Platform.windows() && Files.isRegularFile(start)) start.toFile().setExecutable(true); // copying loses that on Unix
             return start;
         } finally {
             Archives.deleteTree(staging);
@@ -101,16 +138,14 @@ public final class Exporter {
         Files.copy(project.scenePath(), target.resolve(project.scenePath().getFileName()));
         Path graphics = project.root().resolve("game.json"); // the game's graphics settings
         if (Files.exists(graphics)) Files.copy(graphics, target.resolve("game.json"));
-        for (Path folder : List.of(project.scriptsFolder(), project.assetsFolder())) {
+        for (Path folder : List.of(project.scriptsFolder(), project.assetsFolder(), project.scenesFolder())) {
             if (Files.isDirectory(folder)) AssetImporter.copyTree(folder, target.resolve(folder.getFileName()));
         }
     }
 
-    private Path packageWithJava(String name, Path input, Path staging) throws IOException {
+    private Path packageWithJava(String name, Path input, Path staging, java.awt.image.BufferedImage picture) throws IOException {
         Path tool = jpackage();
         if (tool == null) throw new IOException("this Java has no jpackage tool; export without Java instead");
-        Path icon = staging.resolve("icon.ico");
-        AppIcon.writeIco(icon);
         Path output = staging.resolve("output");
         List<String> command = new ArrayList<>(List.of(tool.toString(),
                 "--type", "app-image",
@@ -118,8 +153,18 @@ public final class Exporter {
                 "--input", input.toString(),
                 "--main-jar", "sev7n.jar",
                 "--main-class", "sev7n.Sev7n",
-                "--icon", icon.toString(),
                 "--dest", output.toString()));
+        // the icon: .ico on Windows, .png on Linux (a Mac wants .icns, which Java can't write, so it keeps the default)
+        if (sev7n.Platform.windows()) {
+            Path icon = staging.resolve("icon.ico");
+            AppIcon.writeIco(icon, picture);
+            command.addAll(List.of("--icon", icon.toString()));
+        } else if (!sev7n.Platform.mac()) {
+            Path icon = staging.resolve("icon.png");
+            javax.imageio.ImageIO.write(picture != null ? AppIcon.fitted(picture, 256) : AppIcon.render(256), "png", icon.toFile());
+            command.addAll(List.of("--icon", icon.toString()));
+        }
+        if (sev7n.Platform.mac()) command.addAll(List.of("--java-options", "-XstartOnFirstThread"));
         Path javaHome = Path.of(System.getProperty("java.home"));
         if (Files.isDirectory(javaHome.resolve("jmods"))) {
             command.addAll(List.of("--add-modules", MODULES)); // a full JDK: build a small Java just for the game
@@ -127,7 +172,7 @@ public final class Exporter {
             command.addAll(List.of("--runtime-image", javaHome.toString())); // the Sev7n download: reuse its own Java
         }
         Tools.Result result = Tools.run(command, 10);
-        Path app = output.resolve(name);
+        Path app = output.resolve(sev7n.Platform.mac() ? name + ".app" : name);
         if (result.exitCode() != 0 || !Files.isDirectory(app)) {
             throw new IOException("jpackage failed: " + result.lastLine());
         }

@@ -13,6 +13,16 @@ public final class Entity {
     public final List<String> tags = new ArrayList<>();
     public final Transform transform = new Transform();
     private final List<Component> components = new ArrayList<>();
+    /**
+     * The id of the entity this one is a child of, or -1. A child follows its parent around
+     * (see Hierarchy); its transform is still where it is in the world.
+     */
+    public long parent = -1;
+
+    // Hierarchy's bookkeeping: the offset from the parent, and what both looked like last time
+    Transform local;
+    final Transform lastSelf = new Transform();
+    final Transform lastParent = new Transform();
 
     Entity(long id, String name) {
         this.id = id;

@@ -21,7 +21,7 @@ final class SyntaxColors {
     private static final Set<String> DECLARATIONS = Set.of("var", "func", "style", "behaviour");
     private static final Set<String> CONSTANTS = Set.of("true", "false", "none", "PI");
     private static final Set<String> ENGINE_NAMES = Set.of("entity", "transform", "other");
-    private static final String OPERATORS = "=+-*/%<>!&|";
+    private static final String OPERATORS = "=+-*/%<>!&|?";
 
     static final int PLAIN = EditorStyle.pack(Theme.SYNTAX_PLAIN);
     private static final int KEYWORD = EditorStyle.pack(Theme.SYNTAX_KEYWORD);
@@ -58,6 +58,26 @@ final class SyntaxColors {
             } else if (c == '"' || c == '\'') {
                 i = skipString(text, i);
                 fill(colors, start, i, STRING);
+            } else if (c == 'f' && (peek(text, i + 1) == '"' || peek(text, i + 1) == '\'') && !isWordChar(peek(text, i - 1))) {
+                // f"Score: {score}": text in string color, the code in braces in plain colors
+                i = skipFormatString(text, i + 1);
+                fill(colors, start, i, STRING);
+                int depth = 0;
+                for (int j = start + 2; j < i - 1; j++) {
+                    char d = text.charAt(j);
+                    if (d == '\\' && depth == 0) {
+                        j++;
+                    } else if (d == '{') {
+                        if (depth++ == 0) colors[j] = OPERATOR;
+                        else colors[j] = PLAIN;
+                    } else if (d == '}' && depth > 0) {
+                        colors[j] = --depth == 0 ? OPERATOR : PLAIN;
+                    } else if (depth > 0 && (d == '"' || d == '\'')) {
+                        j = skipString(text, j) - 1; // a string inside the code keeps the string color
+                    } else if (depth > 0) {
+                        colors[j] = PLAIN;
+                    }
+                }
             } else if (c == '#') {
                 i++;
                 while (i < text.length() && Character.digit(text.charAt(i), 16) >= 0) i++;
@@ -68,7 +88,7 @@ final class SyntaxColors {
                 fill(colors, start, i, NUMBER);
             } else if (Character.isLetter(c) || c == '_') {
                 while (i < text.length() && (Character.isLetterOrDigit(text.charAt(i)) || text.charAt(i) == '_')) i++;
-                int propertyEnd = stylePropertyEnd(text, i);
+                int propertyEnd = afterQuestionMark(text, start) ? -1 : stylePropertyEnd(text, i); // "a ? b : c" isn't a property
                 if (propertyEnd > 0) {
                     i = propertyEnd; // color all of "stroke-width", not just "stroke"
                     fill(colors, start, i, PROPERTY);
@@ -137,13 +157,39 @@ final class SyntaxColors {
         return Math.min(i + 1, text.length());
     }
 
+    /** True if the last thing before 'at' on its line (spaces aside) is a '?'. */
+    private static boolean afterQuestionMark(String text, int at) {
+        int j = at - 1;
+        while (j >= 0 && (text.charAt(j) == ' ' || text.charAt(j) == '\t')) j--;
+        return j >= 0 && text.charAt(j) == '?';
+    }
+
+    private static boolean isWordChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
+    }
+
     private static int skipSpaces(String text, int i) {
         while (i < text.length() && (text.charAt(i) == ' ' || text.charAt(i) == '\t')) i++;
         return i;
     }
 
     private static char peek(String text, int i) {
-        return i < text.length() ? text.charAt(i) : '\0';
+        return i >= 0 && i < text.length() ? text.charAt(i) : '\0';
+    }
+
+    /** Like skipString, but quotes inside {braces} belong to the code there (f"{name + "!"}"). */
+    private static int skipFormatString(String text, int i) {
+        char quote = text.charAt(i++);
+        int depth = 0;
+        while (i < text.length() && text.charAt(i) != '\n' && (text.charAt(i) != quote || depth > 0)) {
+            char c = text.charAt(i);
+            if (c == '\\') i++;
+            else if (c == '{') depth++;
+            else if (c == '}' && depth > 0) depth--;
+            else if (depth > 0 && (c == '"' || c == '\'')) i = skipString(text, i) - 1;
+            i++;
+        }
+        return Math.min(i + 1, text.length());
     }
 
     private static void fill(int[] colors, int from, int to, int color) {

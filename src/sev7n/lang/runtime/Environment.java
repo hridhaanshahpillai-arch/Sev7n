@@ -1,6 +1,7 @@
 package sev7n.lang.runtime;
 
 import sev7n.lang.SevenError;
+import sev7n.lang.Suggestions;
 import sev7n.lang.Token;
 
 import java.util.HashMap;
@@ -28,9 +29,18 @@ public class Environment {
     public Object get(Token name) {
         Environment scope = find(name.text());
         if (scope == null) {
-            throw new SevenError("Unknown variable '" + name.text() + "'", name.line());
+            throw new SevenError("Unknown variable '" + name.text() + "'" + didYouMean(name.text()), name.line());
         }
         return scope.values.get(name.text());
+    }
+
+    /** ". Did you mean 'speed'?" when a name is a typo of one that exists, else "". */
+    private String didYouMean(String name) {
+        // nearer scopes first, so your own 'speed' beats the built-in 'seed'
+        java.util.List<java.util.Collection<String>> known = new java.util.ArrayList<>();
+        for (Environment scope = this; scope != null; scope = scope.enclosing) known.add(scope.values.keySet());
+        String hint = Suggestions.closest(name, known);
+        return hint == null ? "" : ". Did you mean '" + hint + "'?";
     }
 
     /** True if the name is defined directly in this scope (ignoring enclosing scopes). */
@@ -60,8 +70,9 @@ public class Environment {
     public void assign(Token name, Object value) {
         Environment scope = find(name.text());
         if (scope == null) {
-            throw new SevenError("Unknown variable '" + name.text()
-                    + "'. Declare it first with: var " + name.text() + " = ...", name.line());
+            String hint = didYouMean(name.text());
+            throw new SevenError("Unknown variable '" + name.text() + "'"
+                    + (hint.isEmpty() ? ". Declare it first with: var " + name.text() + " = ..." : hint), name.line());
         }
         scope.values.put(name.text(), value);
     }

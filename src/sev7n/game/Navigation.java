@@ -51,7 +51,8 @@ final class Navigation {
     private final double feet;
     private final double climb;
     private final boolean flat;
-    private final boolean hasTiles; // most 3D scenes have no solid tilemaps: skip checking them
+    private final boolean hasTiles;
+    private final List<Entity> terrains; // most 3D scenes have no solid tilemaps: skip checking them
     private final Map<Long, double[]> floors = new HashMap<>();
 
     /** A map for one character (its size and where its feet are), ignoring 'ignore' (usually whoever it's going to). */
@@ -70,6 +71,7 @@ final class Navigation {
             if (e != self && e != ignore && !e.has(Rigidbody.class)) world.add(collider);
         }
         hasTiles = !Physics.solidTilemaps(scene).isEmpty();
+        terrains = Ground.terrains(scene);
         flat = !hasFloorBelow(p.x, p.z);
     }
 
@@ -218,6 +220,9 @@ final class Navigation {
                 if (top < feet - 50 || top > feet + 50 || found.stream().anyMatch(f -> Math.abs(f - top) < 0.05)) continue;
                 if (!buried(cx, cz, top) && fits(cx, cz, top)) found.add(top);
             }
+            double land = Ground.heightAt(terrains, cx, cz);
+            if (!Double.isNaN(land) && Math.abs(land - feet) < 50 && found.stream().noneMatch(f -> Math.abs(f - land) < 0.05)
+                    && !buried(cx, cz, land) && fits(cx, cz, land)) found.add(land);
             Collections.sort(found);
         }
         double[] result = found.stream().mapToDouble(Double::doubleValue).toArray();
@@ -249,6 +254,8 @@ final class Navigation {
     }
 
     private boolean hasFloorBelow(double x, double z) {
+        double land = Ground.heightAt(terrains, x, z);
+        if (!Double.isNaN(land) && land <= feet + 0.3 && land >= feet - 2) return true;
         for (WorldCollider collider : world) {
             Box b = collider.bounds();
             if (x >= b.minX() && x <= b.maxX() && z >= b.minZ() && z <= b.maxZ() && b.maxY() <= feet + 0.3 && b.maxY() >= feet - 2) return true;

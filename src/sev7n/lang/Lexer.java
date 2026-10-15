@@ -45,8 +45,14 @@ public class Lexer {
     private int line = 1;
 
     public Lexer(String source, String file) {
+        this(source, file, 1);
+    }
+
+    /** Starts counting lines at 'firstLine' (for code inside a format string, which sits on some line of a file). */
+    public Lexer(String source, String file, int firstLine) {
         this.source = source;
         this.file = file;
+        this.line = firstLine;
     }
 
     public List<Token> tokenize() {
@@ -72,7 +78,8 @@ public class Lexer {
             case ',' -> add(TokenType.COMMA);
             case ':' -> add(TokenType.COLON);
             case ';' -> add(TokenType.SEMICOLON);
-            case '%' -> add(TokenType.PERCENT);
+            case '?' -> add(match('?') ? TokenType.QUESTION_QUESTION : TokenType.QUESTION);
+            case '%' -> add(match('=') ? TokenType.PERCENT_EQUAL : TokenType.PERCENT);
             case '.' -> add(match('.') ? TokenType.DOT_DOT : TokenType.DOT);
             case '+' -> add(match('=') ? TokenType.PLUS_EQUAL : TokenType.PLUS);
             case '-' -> add(match('=') ? TokenType.MINUS_EQUAL : TokenType.MINUS);
@@ -115,12 +122,38 @@ public class Lexer {
     }
 
     private void string(char quote) {
+        add(TokenType.STRING, readString(quote, false));
+    }
+
+    /**
+     * The text up to the closing quote, with escapes like \n turned into what they mean.
+     * In a format string (f"..."), \{ is kept as \{ so the parser knows it's a real brace.
+     */
+    private String readString(char quote, boolean format) {
         StringBuilder value = new StringBuilder();
-        while (peek() != quote && !isAtEnd()) {
+        int depth = 0; // inside { } of a format string, where quotes start strings of their own
+        while ((peek() != quote || depth > 0) && !isAtEnd()) {
             char c = advance();
             if (c == '\n') line++;
+            if (format && depth > 0) {
+                // code: copied as written, for the parser to read later
+                value.append(c);
+                if (c == '{') depth++;
+                else if (c == '}') depth--;
+                else if (c == '"' || c == '\'') {
+                    while (peek() != c && !isAtEnd()) {
+                        char inner = advance();
+                        value.append(inner);
+                        if (inner == '\\' && !isAtEnd()) value.append(advance());
+                    }
+                    if (!isAtEnd()) value.append(advance());
+                }
+                continue;
+            }
+            if (format && c == '{') depth++;
             if (c == '\\' && !isAtEnd()) {
                 char escaped = advance();
+                if (format && (escaped == '{' || escaped == '}')) value.append('\\');
                 value.append(switch (escaped) {
                     case 'n' -> '\n';
                     case 't' -> '\t';
@@ -132,7 +165,7 @@ public class Lexer {
         }
         if (isAtEnd()) throw error("This string is never closed");
         advance(); // closing quote
-        add(TokenType.STRING, value.toString());
+        return value.toString();
     }
 
     /** CSS-style colors: #RGB, #RGBA, #RRGGBB or #RRGGBBAA. */
@@ -174,6 +207,11 @@ public class Lexer {
     private void identifier() {
         while (isAlphaNumeric(peek())) advance();
         String text = source.substring(start, current);
+        // f"Score: {score}" is a format string: the parts in braces are worked out and joined in
+        if (text.equals("f") && (peek() == '"' || peek() == '\'')) {
+            add(TokenType.FORMAT, readString(advance(), true));
+            return;
+        }
         add(KEYWORDS.getOrDefault(text, TokenType.IDENTIFIER));
     }
 

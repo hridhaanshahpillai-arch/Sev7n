@@ -80,7 +80,12 @@ for thing in near { if thing.hasTag("enemy") { thing.addImpulse(vec3(0, 6, 0)) }
 ```
 
 `onCollide(other)` runs once when two colliders start touching, including when a
-Rigidbody lands on the floor.
+Rigidbody lands on the floor. `onCollideEnd(other)` runs when they stop touching (walking out of
+a trigger zone, stepping off a platform).
+
+**Step height** (capsules): how high a step, curb or ledge it walks up without jumping.
+**Rolls** (spheres): balls turn as they roll along the ground. Fast, small things (a cannonball)
+move in small pieces, so they can't skip through thin walls.
 
 ## How it works (and its limits)
 

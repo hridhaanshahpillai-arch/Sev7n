@@ -38,6 +38,18 @@ public final class Blender {
     /** Looks for Blender in the usual places: Program Files, the Microsoft Store/user install, Steam, and PATH. */
     public static Optional<Path> find() {
         List<Path> candidates = new ArrayList<>();
+        // the Blender that comes with Sev7n (in its blender folder) comes first
+        Path bundled = sev7n.Sev7n.home().resolve("blender");
+        candidates.add(bundled.resolve("blender.exe"));
+        candidates.add(bundled.resolve("blender"));
+        candidates.add(bundled.resolve("Blender.app/Contents/MacOS/Blender"));
+        Optional<Path> own = candidates.stream().filter(Files::isRegularFile).findFirst();
+        if (own.isPresent()) return own;
+        if (sev7n.Platform.mac()) {
+            Optional<Path> unpacked = installBundledMac(bundled);
+            if (unpacked.isPresent()) return unpacked;
+        }
+        candidates.clear();
         String localAppData = System.getenv().getOrDefault("LOCALAPPDATA", "");
         for (Path folder : List.of(Path.of("C:\\Program Files\\Blender Foundation"),
                 Path.of(localAppData, "Programs", "Blender Foundation"))) {
@@ -50,10 +62,47 @@ public final class Blender {
         }
         candidates.sort(Comparator.comparing(Path::toString).reversed()); // newest version first
         candidates.add(Path.of("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Blender\\blender.exe"));
-        for (String dir : System.getenv().getOrDefault("PATH", "").split(";")) {
-            if (!dir.isBlank()) candidates.add(Path.of(dir.trim(), "blender.exe"));
+        // a Mac keeps it inside the app; Linux installs it as plain "blender" (often from the package manager or Snap)
+        candidates.add(Path.of("/Applications/Blender.app/Contents/MacOS/Blender"));
+        candidates.add(Path.of(System.getProperty("user.home"), "Applications/Blender.app/Contents/MacOS/Blender"));
+        candidates.add(Path.of("/snap/bin/blender"));
+        for (String dir : System.getenv().getOrDefault("PATH", "").split(java.io.File.pathSeparator)) {
+            if (!dir.isBlank()) candidates.add(Path.of(dir.trim(), sev7n.Platform.program("blender")));
         }
         return candidates.stream().filter(Files::isRegularFile).findFirst();
+    }
+
+    /**
+     * The Mac download carries Blender as the .dmg it comes in (it can't be unpacked on the PC that
+     * makes the download). The first time it's needed, it's copied out of the .dmg into the blender folder.
+     */
+    private static synchronized Optional<Path> installBundledMac(Path folder) {
+        Path app = folder.resolve("Blender.app/Contents/MacOS/Blender");
+        if (Files.isRegularFile(app)) return Optional.of(app);
+        Path dmg;
+        try (Stream<Path> files = Files.list(folder)) {
+            dmg = files.filter(f -> f.toString().endsWith(".dmg")).findFirst().orElse(null);
+        } catch (IOException e) {
+            return Optional.empty();
+        }
+        if (dmg == null) return Optional.empty();
+        try {
+            Path mount = Files.createTempDirectory("sev7n-blender");
+            Tools.Result attached = Tools.run(List.of("hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mount.toString(), dmg.toString()), 5);
+            if (attached.exitCode() != 0) return Optional.empty();
+            try {
+                Tools.run(List.of("cp", "-R", mount.resolve("Blender.app").toString(), folder.toString()), 10);
+            } finally {
+                Tools.run(List.of("hdiutil", "detach", mount.toString(), "-quiet"), 2);
+            }
+            if (Files.isRegularFile(app)) {
+                Files.deleteIfExists(dmg); // unpacked: the .dmg isn't needed any more
+                return Optional.of(app);
+            }
+        } catch (IOException ignored) {
+            // falls back to an installed Blender, if there is one
+        }
+        return Optional.empty();
     }
 
     /** Converts a .blend or .fbx to a .glb next to it. Returns the .glb path. */

@@ -3,10 +3,22 @@
 A 2D and 3D game engine written in Java, with a Unity-style editor, its own scripting language
 (**Seven**) and a visual scripting system (**Eights**).
 
-> **Status: 0.6 alpha.** Expect things to change.
+> **Status: 0.7.6 alpha "Refined".** Expect things to change.
 
-**Download (Windows):** get `Sev7n-0.6-alpha-windows.zip` from the **Releases** page, unzip it anywhere,
-and double-click **Sev7n.exe**. Java is included, so there's nothing else to install.
+**Download** from the **Releases** page:
+
+| Your computer | Download | Then |
+|---|---|---|
+| Windows | `Sev7n-0.7.6-alpha-windows.zip` | double-click **Sev7n.exe** |
+| Mac with Apple chip (M1, M2, M3...) | `Sev7n-0.7.6-alpha-mac-apple-silicon.zip` | double-click **Sev7n.command** (the first time: right-click it > Open, because it isn't signed) |
+| Mac with Intel chip | `Sev7n-0.7.6-alpha-mac-intel.zip` | the same |
+| Linux | `Sev7n-0.7.6-alpha-linux.zip` (or `-linux-arm64`) | run `./sev7n.sh` |
+
+**Nothing else to install:** every download comes with **Java 21** inside (Eclipse Temurin, GPL with the
+Classpath Exception). On a Mac or Linux it unpacks itself the first time Sev7n starts.
+
+Models: **.glb / .gltf** (best) and **.obj** work straight away. Made a model in Blender? Use
+File > Export > glTF 2.0 (.glb). `.blend` and `.fbx` files are converted automatically if Blender is installed.
 
 You build scenes in the editor, then attach **behaviours** to objects, written in Seven code or
 made by connecting Eights nodes:
@@ -28,12 +40,43 @@ behaviour PlayerMove {
 }
 ```
 
-## What's in 0.6
+## What's in 0.7.6 "Refined"
+
+- **Undo and redo** for everything you do in a scene (Ctrl+Z, Ctrl+Y)
+- **Parent and child objects**: drag one onto another in the Hierarchy and it follows it (a sword in a hand,
+  a turret on a tank); scripts use `entity.parent` and `entity.children`
+- **Seven** grew up: f-strings (`f"Score: {score}"`), maps (`{hp: 100}`), `a ? b : c`, `x ?? fallback`,
+  `x in list`, default parameters, functions as values, and errors that suggest a fix ("did you mean 'speed'?")
+- **Eights** can do everything Seven can: 270+ nodes, timers, delays, messages, NPC events
+- **Scenes** fade between each other (`loadScene("Level2", 0.5)`) and can be duplicated, renamed and deleted
+- **Physics**: fast things don't pass through walls, balls roll, `onCollideEnd(other)` when things stop touching
+- **HUD anchors**: `anchor("bottomRight")` pins a HUD to a corner on any screen shape
+- **Sound in the world**: `playSoundAt(path, position)` is quieter far away and comes from the left or right
+- **NPCs** speed up, slow down and take corners smoothly, and step round things they're stuck on
+- **Ragdolls** say when they've landed (`entity.ragdollResting`), **exports** can have their own icon
+
+## What's in 0.7.5
+
+- **First-person** (new): mouse-look (`lockMouse`, `mouseMoveX/Y`), the right mouse button, `entity.send("onHit", ...)`
+  for shots and any other message, (a ready first-person script with shooting and a crosshair is in the guide)
+- **Open worlds** (new): a **Terrain** component (hills, valleys, rock and snow, scattered trees) that characters walk
+  on, ragdolls land on, raycasts hit and NPCs cross; anything past the fog isn't drawn; a day and night cycle script in the guide; scripts can change lights (`entity.lightIntensity`)
+
+## Also in 0.7
+
+- **Scenes** (new): as many as you like (levels, menus); File > New Scene / Open Scene, `loadScene("Level2")`
+  from scripts, `setValue`/`getValue` to carry the score and more between them
+- **Saving and loading** (new): `saveGame()` / `loadGame()` bring back every object, every script's variables
+  and your values; several save slots
+- **Prefabs** (new): right-click > Save as Prefab, Create > Prefab, `spawnPrefab("Zombie", position)` from scripts
+- **fixedUpdate(dt)** (new): runs exactly 60 times a second on every PC
+- **Groundwork for 1.0 multiplayer**: whole-world snapshots, a steady tick and stable object ids
+
+## Also in 0.6
 
 - **Sev7n Hub** (new): Sev7n opens on a Hub like Unity Hub: all your projects (search, open, add a folder,
-  show in Explorer, remove from the list), **New project** from a template (3D, 2D, Empty) with its name and
-  location, **Installs** (this version, Vulkan, Blender, export: what works on this PC, and where to get new
-  versions) and **Learn** (the guides). File > Open Hub... goes back to it from the editor
+  show in Explorer, remove from the list), **New project** (just a name and where it goes), **Installs** (this version, Vulkan, Blender, export: what works on this PC, and where to get new
+  versions) and **Learn** (every guide, by topic). File > Open Hub... goes back to it from the editor
 - **HUD** (new): on-screen text, boxes, bars and pictures from scripts (`text("Score: " + points, 24, 20)`,
   `bar(...)` for health), the same in every window size, with OpenGL and Vulkan
 - **Game UI** (new): buttons, sliders, checkboxes and rounded panels that react to the mouse, title
@@ -89,7 +132,7 @@ behaviour PlayerMove {
 - **Play mode**: runs on a copy of the scene, so Stop puts everything back (like Unity), unless Live Mode is on
 - **Built-in code editor** with Dracula Soft colors, auto-indent, undo, Ctrl+/ comments
 - **Components**: Transform, Mesh Renderer, Sprite Renderer, Sprite Animator, Tilemap, Camera,
-  Directional Light, Box / Sphere / Capsule Collider, Rigidbody, Animator, Particle Effect, NPC, Ragdoll, Behaviour
+  Directional Light, Terrain, Box / Sphere / Capsule Collider, Rigidbody, Animator, Particle Effect, NPC, Ragdoll, Behaviour
 - **Scenes saved as readable JSON**, scripts as plain `.7n` files, graphs as `.8s` files
 
 ## Running it from the source code
@@ -111,16 +154,27 @@ run.bat projects\MyGame\scripts\X.7n     :: open a script in the editor
 run.bat --play projects\MyGame           :: play the game in its own window, no editor
 ```
 
+On **macOS or Linux** (JDK 21+, and `curl`):
+
+```sh
+./run.sh                                 # build the first time, then open the Hub
+./build.sh                               # rebuild build/sev7n.jar
+./run.sh --play projects/MyGame          # play a game without the editor
+```
+
+One `sev7n.jar` runs on all three systems. Exported games are for the system you export on
+(export on a Mac to get a Mac `.app`, on Linux for a Linux program).
+
 ### Editor controls
 
 | Where         | Controls                                                        |
 |---------------|-----------------------------------------------------------------|
-| Anywhere      | F5 play/stop · Ctrl+F5 play in a window · Ctrl+S save everything · Ctrl+D duplicate · Del delete · F1 guides |
+| Anywhere      | F5 play/stop · Ctrl+F5 play in a window · Ctrl+S save everything · Ctrl+Z undo · Ctrl+Y redo · Ctrl+D duplicate · Del delete · F1 guides |
 | Scene view    | click select · right-drag orbit · middle-drag pan · wheel zoom · F focus |
 | Scene view    | W move · E rotate · R scale (hold Ctrl to snap) · 2D button for the flat view |
 | Painting tiles | click/drag paint · Shift erases · Esc stops                    |
 | Game view     | click it while playing so the game gets the keyboard            |
-| Hierarchy     | right-click for actions · drag to reorder                       |
+| Hierarchy     | right-click for actions · drag onto an object to make it a child · drag onto a row's top edge to reorder · drag to empty space to unparent · click ▸ to fold |
 | Project       | double-click to open · drag scripts onto objects · drag pictures/models into the scene |
 | Window        | drop files from Explorer onto Sev7n to import them              |
 | Eights        | right-click add node · drag pin to pin connect · Del delete · middle-drag pan |
@@ -146,6 +200,8 @@ In the editor, press **F1** (or **Help → Guides**) to read these guides with s
 - [docs/2D.md](docs/2D.md): 2D cameras, sprites, sprite animation and tilemaps
 - [docs/PHYSICS.md](docs/PHYSICS.md): Rigidbodies, colliders and triggers
 - [docs/ANIMATION.md](docs/ANIMATION.md): animated 3D models and tweens
+- [docs/WORLDS.md](docs/WORLDS.md): first-person controls, shooting, terrain and open worlds
+- [docs/SCENES.md](docs/SCENES.md): scenes, saving and loading, prefabs, fixedUpdate
 - [docs/HUD.md](docs/HUD.md): on-screen text, health bars, buttons and menus, sound
 - [docs/RAGDOLLS.md](docs/RAGDOLLS.md): ragdolls, and the example playground
 - [docs/NPC.md](docs/NPC.md): NPCs: pathfinding, senses, memory and routines
@@ -184,15 +240,15 @@ and checksum-verified by `get-libs.ps1`.
 
 ## Roadmap ideas
 
+- **0.8: graphics**: shadows, sky, water, grass, bloom, terrain painted with your own pictures, a level builder
+  (like ProBuilder), an Animator and Animation window, and an audio engine (mixer, effects)
+- **1.0: multiplayer** (local and online), built on 0.7's snapshots, steady tick and stable ids
 - UI: text boxes for typing, scrolling lists, gamepad menus
-- Sound in 3D (quieter far away) and echo shaped by the room (acoustics)
+- Echo shaped by the room (acoustics)
 - More model formats (.fbx without Blender)
-- Eights: comment boxes, custom functions, more nodes
-- Physics: rotating bodies, joints, active ragdolls (muscles that keep balance), weight and momentum for characters
+- Eights: comment boxes, custom functions
+- Physics: tumbling boxes, joints, active ragdolls (muscles that keep balance)
 - Animation: morph targets (faces), animation events
-- Parent/child objects in the Hierarchy
-- Undo/redo for scene edits
-- Multiple scenes, prefabs
 
 ## License
 

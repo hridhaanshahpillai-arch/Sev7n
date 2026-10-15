@@ -1,4 +1,4 @@
-# HUD, Menus and Sound (v0.6 alpha)
+# HUD, Menus and Sound (v0.7.5 alpha)
 
 ## On-screen text and HUD
 
@@ -34,6 +34,24 @@ wide as its shape (1280 for a widescreen window), however big the window really 
 drawn later go on top of things drawn earlier.
 
 The HUD shows in the Game view and in the game window, not in the Scene view.
+
+### Anchors: a HUD that fits every screen
+
+Screens come in different shapes (a laptop, an ultrawide monitor), so things on the right edge
+should be measured from the right. `anchor(name)` moves where (0, 0) is, for everything drawn
+after it this frame (buttons and `uiMouseX()` too):
+
+```seven
+anchor("bottomRight")
+rect(-230, -100, 200, 70, #00000070)       // always 30 in from the bottom right corner
+text(ammo, -50, -95, 48, #ffffff, "right")
+anchor("center")
+circle(0, 0, 3)                            // a crosshair in the middle
+anchor("topLeft")                          // back to normal
+```
+
+The anchors: `topLeft` `top` `topRight` `left` `center` `right` `bottomLeft` `bottom` `bottomRight`.
+Each frame starts at `topLeft`. On a world canvas (below), anchors don't apply.
 
 ## Buttons, sliders and menus
 
@@ -160,6 +178,16 @@ setVolume(0.5)                                // every sound and the music at ha
 Sound files are **.wav** (also .aiff and .au). Import them like any other file, or put them in
 your project's `assets/sounds` folder. Up to 24 sounds play at once. Everything stops when the
 game stops.
+
+### Sounds in the world
+
+`playSoundAt` plays a sound at a place: it's quieter the further it is from the camera (silent
+past its range) and comes from the left or right, so players can hear where an enemy is.
+
+```seven
+playSoundAt("assets/sounds/growl.wav", transform.position)             // heard up to 30 units away
+playSoundAt("assets/sounds/explosion.wav", where, 1, 80)               // volume 1, heard up to 80 away
+```
 
 ## In the example
 

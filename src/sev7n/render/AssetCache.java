@@ -139,11 +139,14 @@ public final class AssetCache implements AutoCloseable {
         return load(models, path + (sharp ? "#pixel" : ""), path, file -> Model.upload(loadModel(file), sharp, gpu));
     }
 
-    /** Reads a model file by its type. An .obj's color and texture are applied to its Mesh Renderer on import instead. */
+    /**
+     * Reads a model file by its type. A one-material .obj's color and texture are applied to its
+     * Mesh Renderer on import instead; one with several materials keeps them per part.
+     */
     public static ModelData loadModel(Path file) throws IOException {
         String name = file.getFileName().toString().toLowerCase();
         if (name.endsWith(".glb") || name.endsWith(".gltf")) return GltfLoader.load(file);
-        return new ModelData(List.of(new ModelData.Part(ObjLoader.load(file).mesh(), Color.WHITE, null)));
+        return ObjLoader.loadParts(file);
     }
 
     @FunctionalInterface

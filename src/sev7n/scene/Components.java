@@ -17,6 +17,7 @@ public final class Components {
         register("SpriteRenderer", SpriteRenderer::new);
         register("SpriteAnimator", SpriteAnimator::new);
         register("Tilemap", Tilemap::new);
+        register("Terrain", Terrain::new);
         register("Camera", Camera::new);
         register("Light", Light::new);
         register("BoxCollider", BoxCollider::new);

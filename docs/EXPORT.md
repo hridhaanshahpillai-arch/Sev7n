@@ -7,8 +7,10 @@ Export turns your project into a game anyone can play, without Sev7n.
 1. **File → Export Game...**
 2. Type the game's name.
 3. Leave **Include Java** ticked (recommended).
-4. Click **Export**. It takes a few seconds; the Console says when it's done.
-5. Click **Show in Explorer** or **Play it**.
+4. Pick an **Icon**: any picture in your project (a square PNG looks best) goes on the game's
+   .exe and its window. Leave it on **Sev7n logo** to keep the purple 7.
+5. Click **Export**. It takes a few seconds; the Console says when it's done.
+6. Click **Show in Explorer** or **Play it**.
 
 Exports go to `Sev7n\exports\GameName\`. Exporting again replaces the old export.
 

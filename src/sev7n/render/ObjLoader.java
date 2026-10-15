@@ -2,21 +2,30 @@ package sev7n.render;
 
 import org.joml.Vector3f;
 
+import javax.imageio.ImageIO;
 import java.awt.Color;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Reads Wavefront .obj models (what Blender, Maya and most tools can export).
  *
  * Supports positions, texture coords, normals and polygons of any size (split into
- * triangles). From the .mtl file it reads the first material's color (Kd) and
- * texture (map_Kd), so imported models arrive looking right.
+ * triangles). From the .mtl file it reads each material's color (Kd) and texture (map_Kd),
+ * so imported models arrive looking right.
+ *
+ * A model with one material is one mesh, and its look goes on the Mesh Renderer (see
+ * material()), so you can change it there. A model with several materials (say a gun that's
+ * black, grey and white) becomes one part per material, each with its own color and picture.
  */
 public final class ObjLoader {
 
@@ -25,13 +34,70 @@ public final class ObjLoader {
 
     private ObjLoader() { }
 
+    /** The faces drawn with one material, with their own vertices. */
+    private static final class Group {
+        final FloatArray vertices = new FloatArray();
+        final IntArray indices = new IntArray();
+        final Map<String, Integer> seen = new HashMap<>();
+
+        MeshData mesh() {
+            Vector3f min = new Vector3f(Float.POSITIVE_INFINITY);
+            Vector3f max = new Vector3f(Float.NEGATIVE_INFINITY);
+            for (int i = 0; i < vertices.size; i += MeshData.FLOATS_PER_VERTEX) {
+                Vector3f p = new Vector3f(vertices.data[i], vertices.data[i + 1], vertices.data[i + 2]);
+                min.min(p);
+                max.max(p);
+            }
+            return new MeshData(vertices.toArray(), indices.toArray(), false, min, max);
+        }
+    }
+
+    /** Every face as one mesh (the whole model in one color), plus the first material. */
     public static Model load(Path file) throws IOException {
+        Map<String, Group> groups = read(file, false);
+        return new Model(groups.values().iterator().next().mesh(), material(file));
+    }
+
+    /**
+     * The model ready to draw: one white part if it has a single material (the Mesh Renderer
+     * gives it its look), else one part per material in that material's color and picture.
+     */
+    public static ModelData loadParts(Path file) throws IOException {
+        Map<String, Group> groups = read(file, true);
+        if (groups.size() == 1) return new ModelData(List.of(new ModelData.Part(groups.values().iterator().next().mesh(), Color.WHITE, null)));
+        Map<String, MaterialText> materials = readMaterials(file);
+        Map<String, BufferedImage> pictures = new HashMap<>();
+        List<ModelData.Part> parts = new ArrayList<>();
+        for (Map.Entry<String, Group> group : groups.entrySet()) {
+            MaterialText look = materials.get(group.getKey());
+            Color color = look != null && look.color() != null ? look.color() : Color.WHITE;
+            BufferedImage picture = null;
+            if (look != null && look.texture() != null) {
+                picture = pictures.computeIfAbsent(look.texture(), name -> readPicture(file, name));
+                if (picture != null) color = Color.WHITE; // let the picture show its real colors
+            }
+            parts.add(new ModelData.Part(group.getValue().mesh(), color, picture));
+        }
+        return new ModelData(parts);
+    }
+
+    /** True if the model uses more than one material (so its parts keep their own colors). */
+    public static boolean hasSeveralMaterials(Path file) throws IOException {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        for (String raw : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            String line = raw.strip();
+            if (line.startsWith("usemtl ") && names.add(line.substring(7).strip()) && names.size() > 1) return true;
+        }
+        return false;
+    }
+
+    /** The faces, grouped by material name (in the order they first appear) or all in one group. */
+    private static Map<String, Group> read(Path file, boolean byMaterial) throws IOException {
         FloatArray positions = new FloatArray();
         FloatArray uvs = new FloatArray();
         FloatArray normals = new FloatArray();
-        FloatArray vertices = new FloatArray();
-        IntArray indices = new IntArray();
-        Map<String, Integer> seen = new HashMap<>();
+        Map<String, Group> groups = new LinkedHashMap<>();
+        String material = "";
 
         for (String raw : Files.readAllLines(file, StandardCharsets.UTF_8)) {
             String line = raw.strip();
@@ -41,26 +107,31 @@ public final class ObjLoader {
                 case "v" -> positions.add(num(parts, 1), num(parts, 2), num(parts, 3));
                 case "vt" -> uvs.add(num(parts, 1), 1 - num(parts, 2)); // .obj puts v = 0 at the bottom
                 case "vn" -> normals.add(num(parts, 1), num(parts, 2), num(parts, 3));
-                case "f" -> addFace(parts, positions, uvs, normals, vertices, indices, seen);
-                default -> { } // materials are read separately; groups, smoothing, lines aren't needed
+                case "usemtl" -> { if (byMaterial) material = parts.length > 1 ? parts[1] : ""; }
+                case "f" -> addFace(parts, positions, uvs, normals, groups.computeIfAbsent(material, name -> new Group()));
+                default -> { } // groups, smoothing and lines aren't needed
             }
         }
-        if (indices.size == 0) throw new IOException("The model has no faces");
+        groups.values().removeIf(group -> group.indices.size == 0);
+        if (groups.isEmpty()) throw new IOException("The model has no faces");
+        return groups;
+    }
 
-        Vector3f min = new Vector3f(Float.POSITIVE_INFINITY);
-        Vector3f max = new Vector3f(Float.NEGATIVE_INFINITY);
-        for (int i = 0; i < vertices.size; i += MeshData.FLOATS_PER_VERTEX) {
-            Vector3f p = new Vector3f(vertices.data[i], vertices.data[i + 1], vertices.data[i + 2]);
-            min.min(p);
-            max.max(p);
+    private static BufferedImage readPicture(Path obj, String name) {
+        Path file = obj.resolveSibling(name).normalize();
+        if (!Files.isRegularFile(file)) file = obj.resolveSibling(Path.of(name).getFileName());
+        try {
+            return Files.isRegularFile(file) ? ImageIO.read(file.toFile()) : null;
+        } catch (IOException e) {
+            return null; // drawn in its color instead
         }
-        MeshData mesh = new MeshData(vertices.toArray(), indices.toArray(), false, min, max);
-        return new Model(mesh, material(file));
     }
 
     /** Adds one polygon, split into a fan of triangles. */
-    private static void addFace(String[] parts, FloatArray positions, FloatArray uvs, FloatArray normals,
-                                FloatArray vertices, IntArray indices, Map<String, Integer> seen) {
+    private static void addFace(String[] parts, FloatArray positions, FloatArray uvs, FloatArray normals, Group group) {
+        FloatArray vertices = group.vertices;
+        IntArray indices = group.indices;
+        Map<String, Integer> seen = group.seen;
         int corners = parts.length - 1;
         if (corners < 3) return;
         int[] face = new int[corners];
@@ -160,29 +231,46 @@ public final class ObjLoader {
 
     /** Reads the named material (or the first one) from a .mtl file. */
     private static MaterialText readMaterial(Path mtl, String wanted) {
-        if (!Files.exists(mtl)) return null;
+        Map<String, MaterialText> all = readMaterialFile(mtl);
+        if (all.isEmpty()) return null;
+        return wanted != null && all.containsKey(wanted) ? all.get(wanted) : wanted == null ? all.values().iterator().next() : null;
+    }
+
+    /** Every material of a model's .mtl file, by name (empty if it has none). */
+    private static Map<String, MaterialText> readMaterials(Path obj) throws IOException {
+        for (String raw : Files.readAllLines(obj, StandardCharsets.UTF_8)) {
+            String line = raw.strip();
+            if (line.startsWith("mtllib ")) return readMaterialFile(obj.resolveSibling(line.substring(7).strip()));
+        }
+        return Map.of();
+    }
+
+    private static Map<String, MaterialText> readMaterialFile(Path mtl) {
+        Map<String, MaterialText> materials = new LinkedHashMap<>();
+        if (!Files.exists(mtl)) return materials;
         String current = null;
         String texture = null;
         Color color = null;
-        boolean found = false;
         try {
             for (String raw : Files.readAllLines(mtl, StandardCharsets.UTF_8)) {
                 String line = raw.strip();
                 String[] parts = line.split("\\s+");
                 if (parts[0].equals("newmtl")) {
-                    if (found) break; // finished the material we wanted
+                    if (current != null) materials.put(current, new MaterialText(texture, color));
                     current = parts.length > 1 ? parts[1] : "";
-                    found = wanted == null || current.equals(wanted);
-                } else if (found && parts[0].equals("Kd") && parts.length >= 4) {
+                    texture = null;
+                    color = null;
+                } else if (current != null && parts[0].equals("Kd") && parts.length >= 4) {
                     color = new Color(clamp(parts[1]), clamp(parts[2]), clamp(parts[3]));
-                } else if (found && parts[0].equalsIgnoreCase("map_Kd") && parts.length >= 2) {
+                } else if (current != null && parts[0].equalsIgnoreCase("map_Kd") && parts.length >= 2) {
                     texture = parts[parts.length - 1].replace('\\', '/'); // the file name is last, after any options
                 }
             }
         } catch (IOException e) {
-            return null;
+            return materials;
         }
-        return found || texture != null ? new MaterialText(texture, color) : null;
+        if (current != null) materials.put(current, new MaterialText(texture, color));
+        return materials;
     }
 
     private static float clamp(String value) {

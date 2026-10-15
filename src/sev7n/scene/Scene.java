@@ -55,9 +55,29 @@ public final class Scene {
         copy.active = original.active;
         copy.tags.addAll(original.tags);
         copy.transform.copyFrom(original.transform);
+        copy.parent = original.parent; // a sibling of the original
         for (Component c : original.components()) copy.add(Components.copy(c));
         move(copy, entities.indexOf(original) + 1);
         return copy;
+    }
+
+    /** Copies an entity and all its children (and theirs), keeping the family tree; returns the copy of 'original'. */
+    public Entity duplicateWithChildren(Entity original) {
+        List<Entity> family = new ArrayList<>(List.of(original));
+        family.addAll(Hierarchy.descendants(this, original));
+        java.util.Map<Long, Entity> copies = new java.util.HashMap<>();
+        Entity after = family.get(family.size() - 1);
+        for (Entity e : family) {
+            Entity copy = duplicate(e);
+            move(copy, entities.indexOf(after) + 1);
+            after = copy;
+            copies.put(e.id(), copy);
+        }
+        for (Entity e : family) {
+            Entity copy = copies.get(e.id());
+            if (copies.containsKey(e.parent)) copy.parent = copies.get(e.parent).id();
+        }
+        return copies.get(original.id());
     }
 
     public Entity find(String name) {

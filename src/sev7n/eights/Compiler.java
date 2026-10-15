@@ -4,8 +4,10 @@ import sev7n.math.Vec3;
 
 import java.awt.Color;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,9 +48,14 @@ public final class Compiler {
         code.indent();
 
         for (Variable v : graph.variables) {
-            code.line("var " + safeName(v.name) + " = " + literal(v.value, v.type), null);
+            // an entity variable starts empty (none), not as this object
+            String start = v.type == ValueType.ENTITY ? "none" : literal(v.value, v.type);
+            code.line("var " + safeName(v.name) + " = " + start, null);
         }
         code.line("var _dt = 0", null);
+        for (Node n : graph.nodes()) {
+            if (n.type.fields != null) for (String field : n.type.fields.of(n)) code.line(field, n);
+        }
 
         code.line("", null);
         code.line("func start() {", null);
@@ -62,16 +69,32 @@ public final class Compiler {
         code.indent();
         code.line("_dt = dt", null);
         for (Node event : events(graph, NodeLibrary.ON_UPDATE)) code.follow(event, 0);
-        for (Node event : events(graph, NodeLibrary.KEY_PRESSED)) code.block("if keyPressed(" + code.input(event, 0) + ") {", event, 0);
-        for (Node event : events(graph, NodeLibrary.KEY_HELD)) code.block("if key(" + code.input(event, 0) + ") {", event, 0);
+        for (Node n : graph.nodes()) if (n.type.inUpdate != null) n.type.inUpdate.emit(code, n);
+        for (Node n : graph.nodes()) if (n.type.everyFrame != null) n.type.everyFrame.emit(code, n);
         code.dedent();
         code.line("}", null);
 
-        if (!events(graph, NodeLibrary.ON_COLLIDE).isEmpty()) {
+        // every other event gets a function, shared by all the event nodes that use it
+        Map<String, EventGroup> functions = new LinkedHashMap<>();
+        for (Node n : graph.nodes()) {
+            if (n.type.event == null) continue;
+            NodeType.EventFunction where = n.type.event.of(code, n);
+            EventGroup group = functions.computeIfAbsent(where.name(), name -> new EventGroup(where));
+            if (!group.where.params().equals(where.params())) {
+                group.clashes.add(n);
+                continue;
+            }
+            group.events.add(n);
+        }
+        for (EventGroup group : functions.values()) {
             code.line("", null);
-            code.line("func onCollide(other) {", null);
+            code.line("func " + group.where.name() + "(" + group.where.params() + ") {", null);
             code.indent();
-            for (Node event : events(graph, NodeLibrary.ON_COLLIDE)) code.follow(event, 0);
+            if (!group.where.prelude().isEmpty()) code.line(group.where.prelude(), null);
+            for (Node clash : group.clashes) {
+                code.line("// " + clash.type.title + " can't share " + group.where.name() + "() with " + group.events.get(0).type.title, clash);
+            }
+            for (Node event : group.events) code.follow(event, 0);
             code.dedent();
             code.line("}", null);
         }
@@ -79,6 +102,16 @@ public final class Compiler {
         code.dedent();
         code.line("}", null);
         return new Result(code.out.toString(), Map.copyOf(code.lines));
+    }
+
+    private static final class EventGroup {
+        final NodeType.EventFunction where;
+        final List<Node> events = new ArrayList<>();
+        final List<Node> clashes = new ArrayList<>();
+
+        EventGroup(NodeType.EventFunction where) {
+            this.where = where;
+        }
     }
 
     private static List<Node> events(Graph graph, String typeId) {
@@ -95,9 +128,18 @@ public final class Compiler {
             case Boolean b -> b.toString();
             case String s -> quote(s);
             case Vec3 v -> "vec3(" + number(v.x) + ", " + number(v.y) + ", " + number(v.z) + ")";
-            case Color c -> String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
+            case Color c -> c.getAlpha() == 255 ? String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue())
+                    : String.format("#%02x%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue(), c.getAlpha());
+            case List<?> list -> "[]";
             default -> "none";
         };
+    }
+
+    /** A typed-in name used as code (a function or field name): letters, digits and _ only, or null if it can't be one. */
+    static String identifier(Object value) {
+        if (!(value instanceof String s)) return null;
+        String cleaned = s.trim();
+        return cleaned.matches("[A-Za-z_][A-Za-z0-9_]*") && !RESERVED.contains(cleaned) ? cleaned : null;
     }
 
     private static String number(double d) {
@@ -188,6 +230,16 @@ public final class Compiler {
         /** The Seven expression for a node's data output. */
         public String output(Node node, int output) {
             return node.type.expression == null ? "none" : node.type.expression.of(this, node, output);
+        }
+
+        /** True if a wire goes into this input. */
+        public boolean wired(Node node, int input) {
+            return graph.linkTo(node, input) != null;
+        }
+
+        /** What was typed into an input (ignoring any wire), e.g. a message name used as a function name. */
+        public Object typed(Node node, int input) {
+            return node.value(input);
         }
 
         /** A per-node name for remembered results, e.g. what Spawn created. */

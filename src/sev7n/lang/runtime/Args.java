@@ -54,6 +54,17 @@ public record Args(String function, List<Object> values, int line) {
         throw wrongType(index, "a list");
     }
 
+    @SuppressWarnings("unchecked")
+    public java.util.Map<String, Object> map(int index) {
+        if (get(index) instanceof java.util.Map<?, ?> map) return (java.util.Map<String, Object>) map;
+        throw wrongType(index, "a map, like {hp: 100}");
+    }
+
+    public SevenCallable function(int index) {
+        if (get(index) instanceof SevenCallable f) return f;
+        throw wrongType(index, "a function, like func(x) { return x * 2 }");
+    }
+
     public SevenError error(String message) {
         return new SevenError(function + "(): " + message, line);
     }

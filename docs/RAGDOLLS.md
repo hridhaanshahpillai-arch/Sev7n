@@ -31,6 +31,7 @@ it simulates the spine, neck, head, arms and legs. Fingers, toes and helper bone
 entity.ragdoll()                        // go limp, keeping its speed
 entity.ragdoll(vec3(0, 3, -6))          // ...knocked by a push (units per second)
 entity.getUp()                          // stand up where its hips ended up
+entity.ragdollResting                   // true once it has landed and stopped moving (a good time to get up)
 entity.ragdolling                       // true while it's limp
 ```
 

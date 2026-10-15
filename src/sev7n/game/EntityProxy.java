@@ -10,6 +10,7 @@ import sev7n.scene.Animator;
 import sev7n.scene.Camera;
 import sev7n.scene.Component;
 import sev7n.scene.Entity;
+import sev7n.scene.Light;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.ParticleEmitter;
 import sev7n.scene.Ragdoll;
@@ -27,7 +28,7 @@ import java.util.List;
  *   entity.name  entity.active  entity.tags  entity.transform  entity.position
  *   entity.color  entity.mesh  entity.texture  entity.style = someStyle
  *   entity.hasTag(t)  entity.addTag(t)  entity.removeTag(t)  entity.destroy()
- *   entity.addBehaviour("Name")  entity.behaviour("Name")
+ *   entity.addBehaviour("Name")  entity.behaviour("Name")  entity.send("onHit", 25)
  *   physics:   entity.velocity  entity.grounded  entity.push(v)  entity.addForce(v)  entity.addImpulse(v)
  *              entity.mass  entity.kinematic
  *   sprites:   entity.frame  entity.flipX  entity.flipY  entity.play("run")  entity.animation  entity.animationDone
@@ -38,6 +39,7 @@ import java.util.List;
  *              entity.state  entity.activity  entity.target  entity.arrived  entity.canSee(e)  entity.seen
  *              entity.remember(e, "event", [opinion])  entity.remembers(e, "event")  entity.opinion(e)  entity.setOpinion(e, n)
  *              entity.knows(e)  entity.lastSeen(e)  entity.forget(e)
+ *   light:     entity.lightIntensity  entity.lightColor  entity.lightAmbient
  *   others:    entity.camera  entity.tile(x, y)  entity.setTile(x, y, tile)
  *
  * There is one proxy per entity, so 'other == player' works.
@@ -65,6 +67,19 @@ final class EntityProxy implements SevenObject {
     @Override
     public String typeName() {
         return "entity";
+    }
+
+    /** Everything after "entity." (for "did you mean ...?"). */
+    private static final List<String> PROPERTIES = List.of("name", "active", "tags", "transform", "position", "color", "mesh", "texture", "style",
+            "velocity", "grounded", "push", "addForce", "addImpulse", "mass", "kinematic", "frame", "flipX", "flipY", "play", "animation",
+            "animationDone", "animationSpeed", "animations", "ragdoll", "getUp", "ragdolling", "ragdollResting", "emit", "playEffect", "stopEffect", "effectDone",
+            "moveTo", "follow", "chase", "flee", "stay", "resume", "state", "activity", "target", "arrived", "seen", "canSee", "remember",
+            "remembers", "opinion", "setOpinion", "knows", "lastSeen", "forget", "lightIntensity", "lightColor", "lightAmbient", "camera",
+            "tile", "setTile", "hasTag", "addTag", "removeTag", "destroy", "send", "addBehaviour", "behaviour", "parent", "children");
+
+    @Override
+    public java.util.Collection<String> propertyNames() {
+        return PROPERTIES;
     }
 
     @Override
@@ -128,6 +143,11 @@ final class EntityProxy implements SevenObject {
                 return null;
             });
             case "ragdolling" -> requireRagdoll(line).active;
+            // true once a limp body has stopped moving (landed and lying still): a good moment to getUp()
+            case "ragdollResting" -> {
+                requireRagdoll(line);
+                yield game.ragdollResting(entity);
+            }
             // particle effects
             case "emit" -> new NativeFunction(name, 1, 1, args -> {
                 requireEmitter(args.line()).emit(args.integer(0), entity.transform);
@@ -194,6 +214,10 @@ final class EntityProxy implements SevenObject {
                 requireBrain(args.line()).forget(other(args, 0));
                 return null;
             });
+            // light (a sun that sets, a flickering lamp)
+            case "lightIntensity" -> require(Light.class, "a Directional Light", line).intensity;
+            case "lightColor" -> require(Light.class, "a Directional Light", line).color;
+            case "lightAmbient" -> require(Light.class, "a Directional Light", line).ambient;
             // camera & tilemap
             case "camera" -> entity.get(Camera.class) == null ? null : new CameraProxy(entity.get(Camera.class));
             case "tile" -> new NativeFunction(name, 2, 2, args -> {
@@ -205,6 +229,16 @@ final class EntityProxy implements SevenObject {
                 requireTilemap(args.line()).setTile(args.integer(0), args.integer(1), tile == null ? Tilemap.EMPTY : args.integer(2));
                 return null;
             });
+            // parents and children: a child follows its parent around
+            case "parent" -> {
+                Entity parent = entity.parent < 0 ? null : game.scene().findById(entity.parent);
+                yield parent == null ? null : game.proxy(parent);
+            }
+            case "children" -> {
+                List<Object> children = new ArrayList<>();
+                for (Entity child : sev7n.scene.Hierarchy.children(game.scene(), entity)) children.add(game.proxy(child));
+                yield children;
+            }
             case "hasTag" -> new NativeFunction(name, 1, 1, args -> entity.hasTag(args.string(0)));
             case "addTag" -> new NativeFunction(name, 1, 1, args -> {
                 if (!entity.hasTag(args.string(0))) entity.tags.add(args.string(0));
@@ -213,6 +247,13 @@ final class EntityProxy implements SevenObject {
             case "removeTag" -> new NativeFunction(name, 1, 1, args -> entity.tags.remove(args.string(0)));
             case "destroy" -> new NativeFunction(name, 0, 0, args -> {
                 game.destroy(entity);
+                return null;
+            });
+            // send("onHit", 25): calls that function (with those values) on every behaviour this object has that has it
+            case "send" -> new NativeFunction(name, 1, -1, args -> {
+                Object[] rest = new Object[args.size() - 1];
+                for (int i = 1; i < args.size(); i++) rest[i - 1] = args.get(i);
+                game.send(entity, args.string(0), rest);
                 return null;
             });
             case "addBehaviour" -> new NativeFunction(name, 1, 1, args -> game.addBehaviour(entity, args.string(0), args.line()));
@@ -236,9 +277,19 @@ final class EntityProxy implements SevenObject {
             case "mass" -> requireBody(line).mass = Math.max(0.001, requireType(value, Double.class, name, line));
             case "kinematic" -> requireBody(line).kinematic = Values.isTruthy(value);
             case "frame" -> requireSprite(line).frame = requireType(value, Double.class, name, line).intValue();
+            case "lightIntensity" -> require(Light.class, "a Directional Light", line).intensity = Math.max(0, requireType(value, Double.class, name, line));
+            case "lightColor" -> require(Light.class, "a Directional Light", line).color = requireType(value, Color.class, name, line);
+            case "lightAmbient" -> require(Light.class, "a Directional Light", line).ambient = Math.max(0, requireType(value, Double.class, name, line));
             case "animationSpeed" -> requireModelAnimator(line).speed = requireType(value, Double.class, name, line);
             case "flipX" -> requireSprite(line).flipX = Values.isTruthy(value);
             case "flipY" -> requireSprite(line).flipY = Values.isTruthy(value);
+            // entity.parent = other (it follows other from now on, staying where it is) or none
+            case "parent" -> {
+                Entity parent = value == null ? null : requireType(value, EntityProxy.class, name, line).entity();
+                if (!sev7n.scene.Hierarchy.setParent(game.scene(), entity, parent)) {
+                    throw new SevenError(entity.name + " can't be a child of " + parent.name + ": " + parent.name + " is already inside " + entity.name, line);
+                }
+            }
             default -> throw new SevenError("entity." + name + " can't be changed", line);
         }
     }

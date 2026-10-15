@@ -20,6 +20,7 @@ import sev7n.scene.BoxCollider;
 import sev7n.scene.Camera;
 import sev7n.scene.CapsuleCollider;
 import sev7n.scene.Entity;
+import sev7n.scene.Hierarchy;
 import sev7n.scene.Light;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.Npc;
@@ -30,6 +31,7 @@ import sev7n.scene.SceneSerializer;
 import sev7n.scene.SphereCollider;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
+import sev7n.scene.Terrain;
 import sev7n.scene.Tilemap;
 
 import java.awt.Color;
@@ -60,7 +62,7 @@ import java.util.stream.Stream;
 final class EditorContext {
 
     /** Things the Create menus can make. */
-    static final List<String> CREATABLE = List.of("Empty", "Cube", "Sphere", "Plane", "Cylinder", "Sprite", "Tilemap", "Camera", "Light", "NPC");
+    static final List<String> CREATABLE = List.of("Empty", "Cube", "Sphere", "Plane", "Cylinder", "Sprite", "Tilemap", "Terrain", "Camera", "Light", "NPC");
 
     final Project project;
     final Log log = new Log();
@@ -109,6 +111,161 @@ final class EditorContext {
         renderer.setSettings(graphics);
         renderer.assets().setRoot(project.root());
         renderer.assets().onProblem(log::warning);
+        history.reset(scene, -1);
+    }
+
+    // ---------------------------------------------------------------- undo and redo
+
+    private final UndoHistory history = new UndoHistory();
+    private int editVersion;        // bumps with every markDirty
+    private int recordedVersion;
+    private double sinceRecorded;
+
+    /**
+     * Records the scene as an undo step if it changed. Called every frame by the editor;
+     * 'editing' is true while a drag or a typed value is still going (that's finished later as one step).
+     */
+    void recordUndo(boolean editing, double dt) {
+        sinceRecorded += dt;
+        if (playing() || editing) return;
+        // a check after every edit, and now and then anyway (in case something changed the scene without saying so)
+        if (editVersion == recordedVersion && sinceRecorded < 1) return;
+        recordedVersion = editVersion;
+        sinceRecorded = 0;
+        history.record(editScene, selectedId);
+    }
+
+    boolean canUndo() {
+        return !playing() && history.canUndo();
+    }
+
+    boolean canRedo() {
+        return !playing() && history.canRedo();
+    }
+
+    void undo() {
+        restore(playing() ? null : history.undo(), "Undo");
+    }
+
+    void redo() {
+        restore(playing() ? null : history.redo(), "Redo");
+    }
+
+    private void restore(UndoHistory.Restored step, String what) {
+        if (playing()) {
+            log.system(what + " works on the scene while it isn't playing: press Stop first");
+            return;
+        }
+        if (step == null) return;
+        editScene = step.scene();
+        selectedId = editScene.findById(step.selected()) != null ? step.selected() : -1;
+        sceneDirty = true;
+        recordedVersion = editVersion;
+        sinceRecorded = 0;
+    }
+
+    // ---------------------------------------------------------------- scenes and prefabs
+
+    /** The scene being edited ("Main", "Level2"...). */
+    private String sceneName = Project.MAIN_SCENE;
+
+    String sceneName() {
+        return sceneName;
+    }
+
+    /** Opens another scene for editing (saving this one first if it has changes). */
+    void openScene(String name) {
+        if (name.equals(sceneName) && !playing()) return;
+        if (playing()) stop();
+        try {
+            Scene next = project.loadScene(name);
+            if (sceneDirty) saveAll();
+            editScene = next;
+            sceneName = name;
+            sceneDirty = false;
+            select(null);
+            previewingId = -1;
+            history.reset(next, -1);
+            log.system("Opened the scene " + name);
+        } catch (IOException | RuntimeException e) {
+            log.error("Couldn't open the scene " + name + ": " + e.getMessage());
+        }
+    }
+
+    /** Makes a new scene (with a camera) and opens it. */
+    void createScene(String name) {
+        try {
+            project.createScene(name.trim());
+            openScene(name.trim());
+        } catch (IOException e) {
+            log.error("Couldn't make the scene: " + e.getMessage());
+        }
+    }
+
+    /** Saves the open scene, copies it under a new name, and opens the copy. */
+    void duplicateScene(String newName) {
+        try {
+            if (playing()) stop();
+            saveAll();
+            project.duplicateScene(sceneName, newName.trim());
+            openScene(newName.trim());
+        } catch (IOException e) {
+            log.error("Couldn't copy the scene: " + e.getMessage());
+        }
+    }
+
+    /** Renames the open scene (scripts that loadScene() the old name need changing too). */
+    void renameScene(String newName) {
+        String old = sceneName;
+        try {
+            if (playing()) stop();
+            saveAll();
+            project.renameScene(old, newName.trim());
+            sceneName = newName.trim();
+            editScene.name = sceneName;
+            log.system("Renamed the scene " + old + " to " + sceneName + ". Scripts that use loadScene(\"" + old + "\") need the new name");
+        } catch (IOException e) {
+            log.error("Couldn't rename the scene: " + e.getMessage());
+        }
+    }
+
+    /** Moves the open scene to the Recycle Bin and opens Main. */
+    void deleteScene() {
+        String old = sceneName;
+        try {
+            if (playing()) stop();
+            project.deleteScene(old);
+            sceneDirty = false; // nothing left to save
+            sceneName = Project.MAIN_SCENE + "?"; // so openScene doesn't think Main is already open
+            openScene(Project.MAIN_SCENE);
+            log.system("Moved the scene " + old + " to the Recycle Bin");
+        } catch (IOException e) {
+            log.error("Couldn't delete the scene: " + e.getMessage());
+        }
+    }
+
+    /** Saves an object as a prefab in assets/prefabs. */
+    void saveAsPrefab(Entity entity) {
+        try {
+            String name = project.savePrefab(scene(), entity);
+            log.system("Saved the prefab " + name + " (assets/prefabs/" + name + ".prefab). Scripts make copies with spawnPrefab(\"" + name + "\")");
+        } catch (IOException e) {
+            log.error("Couldn't save the prefab: " + e.getMessage());
+        }
+    }
+
+    /** Places a copy of a prefab in the scene. */
+    Entity createFromPrefab(String name, Vec3 position) {
+        try {
+            Map<String, Object> data = project.loadPrefab(name);
+            Entity entity = SceneSerializer.placeFamily(scene(), data, name, position);
+            select(entity);
+            markDirty();
+            return entity;
+        } catch (IOException | RuntimeException e) {
+            log.error("Couldn't place the prefab: " + e.getMessage());
+            return null;
+        }
     }
 
     /** A picture to show in the editor's panels, or null. The editor always draws with OpenGL. */
@@ -222,6 +379,10 @@ final class EditorContext {
             return;
         }
         try {
+            if (ObjLoader.hasSeveralMaterials(project.root().resolve(modelPath))) {
+                mesh.color = Color.WHITE; // each part has its own color
+                return;
+            }
             ObjLoader.Material material = ObjLoader.material(project.root().resolve(modelPath));
             mesh.color = material.color() != null ? material.color() : Color.WHITE;
             if (material.texture() != null) {
@@ -265,12 +426,16 @@ final class EditorContext {
      */
     void markDirty() {
         if (!playing()) sceneDirty = true;
+        editVersion++;
     }
 
     /** Live Mode is on and the game is running: editor changes are kept. */
     boolean live() {
-        return playing() && editorSettings.liveMode;
+        return playing() && editorSettings.liveMode && !playingAnotherScene;
     }
+
+    /** True once the game moved to another scene (or loaded a save): Live Mode stops copying edits back. */
+    private boolean playingAnotherScene;
 
     boolean sceneDirty() {
         return sceneDirty;
@@ -306,6 +471,7 @@ final class EditorContext {
                 entity.add(new Rigidbody());
                 entity.add(new Npc()).idle = "Wander";
             }
+            case "Terrain" -> entity.add(new Terrain()); // land to walk on, centred on the object
             case "Tilemap" -> {
                 entity.add(new Tilemap());
                 paintTiles(entity);
@@ -341,16 +507,44 @@ final class EditorContext {
         return entity;
     }
 
+    /** Copies an object, with its children. */
     void duplicate(Entity entity) {
         if (entity == null) return;
-        select(scene().duplicate(entity));
+        select(scene().duplicateWithChildren(entity));
         markDirty();
     }
 
+    /** Removes an object and its children (Ctrl+Z brings them back). */
     void delete(Entity entity) {
         if (entity == null) return;
-        scene().remove(entity);
-        if (entity.id() == selectedId) select(null);
+        Scene scene = scene();
+        for (Entity child : Hierarchy.descendants(scene, entity)) scene.remove(child);
+        scene.remove(entity);
+        if (scene.findById(selectedId) == null) select(null);
+        markDirty();
+    }
+
+    /** Makes 'child' follow 'parent' (null: no parent), staying where it is. */
+    void setParent(Entity child, Entity parent) {
+        Scene scene = scene();
+        if (!Hierarchy.setParent(scene, child, parent)) {
+            log.warning(child.name + " can't go inside " + parent.name + ": " + parent.name + " is already inside " + child.name);
+            return;
+        }
+        // keep the family together in the list: right after the parent (and its other children)
+        if (parent != null) {
+            List<Entity> family = Hierarchy.descendants(scene, parent);
+            Entity last = parent;
+            for (Entity e : family) if (e != child && !Hierarchy.isAncestor(scene, child, e)) last = e;
+            List<Entity> moving = new ArrayList<>(List.of(child));
+            moving.addAll(Hierarchy.descendants(scene, child));
+            int at = scene.entities().indexOf(last) + 1;
+            for (Entity e : moving) {
+                int from = scene.entities().indexOf(e);
+                if (from < at) at--;
+                scene.move(e, at++);
+            }
+        }
         markDirty();
     }
 
@@ -402,9 +596,9 @@ final class EditorContext {
             liveEdits.capture(game.scene());
         }
         try {
-            project.saveScene(editScene);
+            project.saveScene(sceneName, editScene);
             sceneDirty = false;
-            log.system("Saved " + project.scenePath().getFileName());
+            log.system("Saved " + project.scenePath(sceneName).getFileName());
         } catch (IOException e) {
             log.error("Couldn't save the scene: " + e.getMessage());
         }
@@ -451,6 +645,7 @@ final class EditorContext {
         if (live()) liveEdits.apply(game.scene(), editScene);
         game.stop();
         game = null;
+        playingAnotherScene = false;
         paused = false;
         stoppedByError = false;
         input.reset();
@@ -504,6 +699,7 @@ final class EditorContext {
     void update(double dt) {
         for (Runnable task; (task = mainThread.poll()) != null; ) task.run();
         if (game == null) {
+            Hierarchy.update(editScene); // children follow their parents while you edit too
             previewAnimation(dt);
             previewEffects(dt);
         }
@@ -517,6 +713,11 @@ final class EditorContext {
             reloadChangedScripts(dt);
         }
         if (!paused) game.update(dt);
+        if (game.successor() != null) {
+            game = game.successor(); // a script loaded another scene or a saved game
+            playingAnotherScene = true;
+            log.system("Playing the scene " + game.sceneName() + (editorSettings.liveMode ? " (Live Mode pauses until you stop)" : ""));
+        }
         if (game.quitRequested()) {
             stop(); // quit() in a script: in the editor, that's Stop
             return;

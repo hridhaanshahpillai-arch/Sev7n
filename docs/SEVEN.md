@@ -1,4 +1,4 @@
-# The Seven Language (v0.5 alpha)
+# The Seven Language (v0.7.5 alpha)
 
 Seven is the scripting language of the Sev7n engine. It mixes:
 
@@ -74,10 +74,23 @@ Semicolons are optional. Variables must be declared with `var` before use. This 
 | Kind       | Operators                                  |
 |------------|--------------------------------------------|
 | Math       | `+ - * / %` (`%` is always positive: `-1 % 5 == 4`) |
-| Assign     | `= += -= *= /=`                            |
+| Assign     | `= += -= *= /= %=`                         |
 | Compare    | `== != < <= > >=`                          |
 | Logic      | `and or not` (also `&& \|\| !`)            |
+| In         | `x in list`, `"key" in map`, `"ell" in "hello"`, `x in 0..10` |
+| Choose     | `condition ? this : that` (`health < 30 ? #ff5555 : #50fa7b`) |
+| Or else    | `value ?? fallback`: the value, or the fallback if it's `none` (`find("Boss") ?? entity`) |
 | Range      | `0..10` → 0 up to 9; `10..0` → 10 down to 1 |
+
+### Text with values in it: f-strings
+
+Put `f` before a string and anything in `{braces}` is worked out and joined in:
+
+```seven
+text(f"Score: {score}   Lives: {lives}", 40, 40)
+print(f"{entity.name} is at {round(transform.position.y, 1)} m")
+print(f"Use \{ and \} for real braces")
+```
 
 `+` also joins strings: `"HP: " + hp`.
 
@@ -111,6 +124,25 @@ func add(a, b) {
 Functions can live inside a behaviour (they can use its fields) or at the top of a script file
 (any behaviour can call them).
 
+**Defaults:** a parameter can have a value it uses when it's left out. Once one has a default,
+the ones after it need one too.
+
+```seven
+func hurt(damage, knockback = vec3(), sound = "assets/sounds/hit.wav") { ... }
+hurt(10)                         // knockback = vec3(), the default sound
+hurt(10, vec3(0, 3, 0))
+```
+
+**Functions as values:** `func(x) { ... }` without a name is a function you can keep in a variable
+or hand to another function (callbacks, sorting, filtering):
+
+```seven
+var double = func(x) { return x * 2 }
+print(double(4))                                              // 8
+tween(entity, "scale", vec3(2), 0.5, "outBack", func() { print("grown!") })
+var alive = filter(enemies, func(e) { return e.behaviour("Enemy").health > 0 })
+```
+
 ### Lists
 
 ```seven
@@ -120,8 +152,42 @@ print(items[0], items[-1], len(items))   // 1 4 4
 items[1] = 20
 var last = pop(items)
 remove(items, 0)            // remove by index
-contains(items, 20)         // true
+contains(items, 20)         // true (or: 20 in items)
 ```
+
+| Function | Does |
+|----------|------|
+| `push(list, x)`, `pop(list)`, `insert(list, i, x)` | add to the end, take off the end, put in at a position |
+| `remove(list, i)`, `removeItem(list, x)`, `clear(list)` | take out by position, take out a matching item, empty it |
+| `indexOf(list, x)` | where it is, or -1 |
+| `slice(list, from, [to])` | a copy of part of it (negative numbers count from the end) |
+| `sort(list)`, `sort(list, func(x) { return ... })` | in order, or in order of what the function gives |
+| `reverse(list)`, `shuffle(list)`, `copy(list)` | backwards, mixed up, a separate copy |
+| `filter(list, test)`, `map(list, change)` | the items the test says true for; a list of what the function gives for each |
+| `first(list, test)`, `any(list, test)`, `all(list, test)` | the first match (or none); is any / is every item a match? |
+| `choose(list)`, `len(list)` | a random item; how many |
+
+### Maps
+
+A map keeps values by name: an inventory, a character's stats, settings.
+
+```seven
+var stats = {hp: 100, speed: 5, "full name": "Bo"}
+print(stats.hp, stats["full name"])
+stats.hp -= 10              // change one
+stats.armor = 3             // add one
+if "armor" in stats { ... }
+for key in stats { print(key, stats[key]) }
+```
+
+`keys(map)`, `values(map)`, `len(map)`, `has(map, key)`, `get(map, key, fallback)` (the fallback
+when the key isn't there), `remove(map, key)`. Maps save with `saveGame()` like lists do.
+
+### Text
+
+`upper lower trim` · `replace(text, find, with)` · `split(text, ",")` → a list · `join(list, ", ")` → text ·
+`startsWith endsWith` · `repeat("ab", 3)` · `slice(text, 1, -1)` · `indexOf(text, piece)` ·
+`fixed(3.14159, 2)` → `"3.14"` (always that many decimals) · `fixed(7, 0, 2)` → `"07"` (for clocks)
 
 ---
 
@@ -190,6 +256,8 @@ Y is up. An object with no rotation faces **-Z** ("forward").
 | `destroy()`                | removes it at the end of the frame              |
 | `addBehaviour("Name")`     | attaches another behaviour while playing        |
 | `behaviour("Name")`        | another behaviour on the same object, or `none` |
+| `parent`                   | the object it follows, or `none`; `entity.parent = other` makes it follow `other` (`none` lets go) |
+| `children`                 | a list of the objects that follow it            |
 
 With the matching component on the object ([2D games](2D.md), [physics](PHYSICS.md)):
 
@@ -310,5 +378,6 @@ See [animation](ANIMATION.md) and [particle effects](EFFECTS.md).
 ## Errors
 
 An error stops the game and appears in the **Console** with its file and line,
-like `PlayerMove.7n:12: Unknown variable 'spedd'`. Click it to jump to that line.
+like `PlayerMove.7n:12: Unknown variable 'spedd'. Did you mean 'speed'?`. Click it to jump to that line.
+Misspelled properties get a suggestion too (`entity.positon` → did you mean `position`?).
 A script that runs too long without finishing (an infinite loop, for example) is stopped automatically.

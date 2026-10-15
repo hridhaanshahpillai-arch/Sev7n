@@ -61,7 +61,7 @@ public final class AppWindow {
         try (GLFWImage.Buffer images = GLFWImage.malloc(sizes.length)) {
             ByteBuffer[] pixels = new ByteBuffer[sizes.length];
             for (int i = 0; i < sizes.length; i++) {
-                BufferedImage image = AppIcon.render(sizes[i]);
+                BufferedImage image = AppIcon.windowIcon(sizes[i]);
                 pixels[i] = toRgba(image);
                 images.position(i).width(sizes[i]).height(sizes[i]).pixels(pixels[i]);
             }

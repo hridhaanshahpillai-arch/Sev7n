@@ -44,7 +44,7 @@ public final class EditorApp implements MainMenu.Actions {
     public record TestRun(Path screenshot, int frames, boolean play, String select, String guide, String tab) { }
 
     private static final Path LAYOUT_FILE = Path.of(
-            System.getenv().getOrDefault("APPDATA", System.getProperty("user.home")), "Sev7n", "editor-layout.ini");
+            sev7n.Platform.dataFolder().toString(), "editor-layout.ini");
 
     private final ImGuiImplGlfw imguiGlfw = new ImGuiImplGlfw();
     private final ImGuiImplGl3 imguiGl3 = new ImGuiImplGl3();
@@ -193,7 +193,8 @@ public final class EditorApp implements MainMenu.Actions {
             }
             glfwPollEvents();
             double now = glfwGetTime();
-            ctx.update(Math.min(now - last, 0.1)); // cap big hitches (e.g. dragging the window)
+            double dt = Math.min(now - last, 0.1); // cap big hitches (e.g. dragging the window)
+            ctx.update(dt);
             last = now;
             applyEditorSettings();
 
@@ -202,6 +203,9 @@ public final class EditorApp implements MainMenu.Actions {
             ImGui.newFrame();
             ImGuizmo.beginFrame();
             drawUi();
+            // an edit is finished once nothing is being dragged or typed into: then it becomes one undo step
+            boolean editing = ImGui.isAnyItemActive() || ImGui.isMouseDown(0) || ImGui.isMouseDown(1) || ImGuizmo.isUsing();
+            ctx.recordUndo(editing, dt);
             ImGui.render();
 
             Framebuffer.unbind();
@@ -280,6 +284,11 @@ public final class EditorApp implements MainMenu.Actions {
         if (io.getKeyCtrl() && ImGui.isKeyPressed(ImGuiKey.Comma, false)) openSettings();
         if (io.getKeyCtrl() && ImGui.isKeyPressed(ImGuiKey.S, false)) ctx.saveAll();
         if (typing || gameHasKeys || eights.focused()) return; // Eights handles its own Delete
+        if (io.getKeyCtrl() && ImGui.isKeyPressed(ImGuiKey.Z, false)) {
+            if (io.getKeyShift()) ctx.redo();
+            else ctx.undo();
+        }
+        if (io.getKeyCtrl() && ImGui.isKeyPressed(ImGuiKey.Y, false)) ctx.redo();
         if (io.getKeyCtrl() && ImGui.isKeyPressed(ImGuiKey.D, false)) ctx.duplicate(ctx.selected());
         if (ImGui.isKeyPressed(ImGuiKey.Delete, false)) ctx.delete(ctx.selected());
     }
@@ -309,6 +318,7 @@ public final class EditorApp implements MainMenu.Actions {
             if (test.guide().equals("settings")) openSettings();
             else if (test.guide().equals("window")) ctx.playInWindow();
             else if (test.guide().equals("sprites")) spriteEditor.open(ctx.selected());
+            else if (test.guide().startsWith("graph:")) eights.open(ctx.project.scriptsFolder().resolve(test.guide().substring(6) + ".8s"), 0);
             else openGuide(test.guide());
         }
         if (frame == 6 && test.tab() != null) ImGui.setWindowFocus(test.tab());

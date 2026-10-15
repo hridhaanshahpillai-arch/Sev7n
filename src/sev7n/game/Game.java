@@ -17,7 +17,9 @@ import sev7n.scene.Npc;
 import sev7n.scene.Ragdoll;
 import sev7n.scene.Rigidbody;
 import sev7n.scene.ParticleEmitter;
+import sev7n.scene.Json;
 import sev7n.scene.Scene;
+import sev7n.scene.SceneSerializer;
 import sev7n.scene.SpriteAnimator;
 import sev7n.scene.SpriteRenderer;
 
@@ -76,6 +78,19 @@ public final class Game {
     private double dayLength = 600;
     private boolean failed = false;
 
+    // scenes, saves and prefabs
+    private Path scriptsFolder;
+    private String sceneName = "Main";
+    private String saveName = "Game";
+    private final Map<String, Object> values = new LinkedHashMap<>(); // setValue/getValue: kept across scenes and in saves
+    private String sceneRequest;                  // loadScene() asked for this scene
+    private Map<String, Object> loadRequest;      // loadGame() asked for this saved game
+    private Game successor;                       // the game that took over (another scene, a loaded save)
+
+    /** fixedUpdate(dt) runs this often (seconds), however fast the frames come. */
+    static final double FIXED_STEP = 1 / 60.0;
+    private double fixedTime;
+
     public Game(Scene scene, Log log, Input input) {
         this.scene = scene;
         this.log = log;
@@ -89,7 +104,11 @@ public final class Game {
 
     /** Loads every script, attaches behaviours and calls start(). Returns false on errors. */
     public boolean start(Path scriptsFolder) {
-        if (scriptsFolder.toAbsolutePath().getParent() != null) sound = new Sound(scriptsFolder.toAbsolutePath().getParent());
+        this.scriptsFolder = scriptsFolder;
+        if (scriptsFolder.toAbsolutePath().getParent() != null) {
+            sound = new Sound(scriptsFolder.toAbsolutePath().getParent());
+            saveName = scriptsFolder.toAbsolutePath().getParent().getFileName().toString();
+        }
         return guard(() -> {
             loadScripts(scriptsFolder);
             for (Entity entity : new ArrayList<>(scene.entities())) {
@@ -108,12 +127,21 @@ public final class Game {
 
     public void update(double dt) {
         if (failed) return;
+        double realDt = dt;
         dt *= timeScale;
         time += dt;
         scene.hud.clear(); // scripts draw the HUD afresh every frame
         ui.beginFrame();
         final double scaled = dt;
         guard(() -> {
+            // fixedUpdate(dt) runs at a steady FIXED_STEP, however fast the frames come
+            // (steady steps are what physics-heavy and networked games need)
+            fixedTime += scaled;
+            for (int steps = 0; fixedTime >= FIXED_STEP && steps < 5; steps++) {
+                fixedTime -= FIXED_STEP;
+                callAll("fixedUpdate", FIXED_STEP);
+            }
+            if (fixedTime > FIXED_STEP) fixedTime = 0; // too far behind: catch up rather than spiral
             for (Map.Entry<Entity, List<BehaviourInstance>> entry : new ArrayList<>(behaviours.entrySet())) {
                 if (!entry.getKey().active || destroyQueue.contains(entry.getKey())) continue;
                 for (BehaviourInstance instance : new ArrayList<>(entry.getValue())) {
@@ -131,16 +159,175 @@ public final class Game {
             hour = (hour + scaled * 24 / dayLength) % 24;
             updateNpcs(scaled);
             physics.step(scene, scaled);
+            sev7n.scene.Hierarchy.update(scene); // children follow their parents
             if (scaled > 0) updateRagdolls(scaled);
             animate(scaled);
-            for (Collisions.Contact contact : collisions.newContacts(scene)) {
-                notifyCollision(contact.a(), contact.b());
-                notifyCollision(contact.b(), contact.a());
+            Collisions.Changes contacts = collisions.update(scene);
+            for (Collisions.Contact contact : contacts.started()) {
+                notifyCollision(contact.a(), contact.b(), "onCollide");
+                notifyCollision(contact.b(), contact.a(), "onCollide");
+            }
+            for (Collisions.Contact contact : contacts.ended()) {
+                if (!scene.contains(contact.a()) || !scene.contains(contact.b())) continue;
+                notifyCollision(contact.a(), contact.b(), "onCollideEnd");
+                notifyCollision(contact.b(), contact.a(), "onCollideEnd");
             }
         });
         flushDestroyed();
+        fades(realDt);
         ui.endFrame();
         input.endFrame();
+        if (sceneRequest != null || loadRequest != null) changeOver();
+    }
+
+    private void callAll(String method, Object... args) {
+        for (Map.Entry<Entity, List<BehaviourInstance>> entry : new ArrayList<>(behaviours.entrySet())) {
+            if (!entry.getKey().active || destroyQueue.contains(entry.getKey())) continue;
+            for (BehaviourInstance instance : new ArrayList<>(entry.getValue())) seven.callMethod(instance, method, args);
+        }
+    }
+
+    // ---------------------------------------------------------------- scenes, saves, prefabs
+
+    /** The game that took over from this one (after loadScene or loadGame), or null. Whoever runs games switches to it. */
+    public Game successor() {
+        return successor;
+    }
+
+    /** Which scene this is ("Main", "Level2"...). */
+    public String sceneName() {
+        return sceneName;
+    }
+
+    /** The name saves are kept under (the project's, or an exported game's). */
+    public void setSaveName(String name) {
+        saveName = name;
+    }
+
+    Map<String, Object> values() {
+        return values;
+    }
+
+    Map<Entity, List<BehaviourInstance>> behaviourInstances() {
+        return behaviours;
+    }
+
+    void requestScene(String name) {
+        requestScene(name, 0);
+    }
+
+    /** Switches scene at the end of the frame, or after fading to black for 'fade' seconds (then the new scene fades in). */
+    void requestScene(String name, double fade) {
+        if (fade <= 0) {
+            sceneRequest = name;
+            fadeLength = 0;
+            return;
+        }
+        if (fadingTo != null) return; // already on the way somewhere
+        fadingTo = name;
+        fadeLength = fade;
+        fadeTime = 0;
+    }
+
+    /** Every scene in the project ("Main" first). */
+    List<String> sceneNames() {
+        if (scriptsFolder == null) return List.of(sceneName);
+        try {
+            return Project.openOrCreate(scriptsFolder.toAbsolutePath().getParent()).sceneNames();
+        } catch (IOException e) {
+            return List.of(sceneName);
+        }
+    }
+
+    // scene fades: out before a change, in after it (in real seconds, so they work while the game is paused too)
+    private String fadingTo;
+    private double fadeLength;
+    private double fadeTime;
+    private double fadeInLength;
+    private double fadeInTime;
+
+    /** Runs the fades and draws the black over everything; 'realDt' is unscaled by timeScale. */
+    private void fades(double realDt) {
+        double darkness = 0;
+        if (fadingTo != null) {
+            fadeTime += realDt;
+            darkness = Math.min(1, fadeTime / fadeLength);
+            if (fadeTime >= fadeLength) {
+                sceneRequest = fadingTo;
+                fadingTo = null;
+            }
+        } else if (fadeInTime < fadeInLength) {
+            fadeInTime += realDt;
+            darkness = Math.max(0, 1 - fadeInTime / fadeInLength);
+        }
+        if (darkness > 0) scene.hud.addPlaced(new sev7n.scene.Hud.Box(0, 0, scene.hud.width(), sev7n.scene.Hud.HEIGHT, new java.awt.Color(0, 0, 0, (int) Math.round(darkness * 255))));
+    }
+
+    /** Builds the next game (another scene, or a saved one) at the end of the frame. */
+    private void changeOver() {
+        String wanted = sceneRequest;
+        Map<String, Object> saved = loadRequest;
+        sceneRequest = null;
+        loadRequest = null;
+        try {
+            Scene next = saved != null ? Snapshot.world(saved) : Project.openOrCreate(scriptsFolder.toAbsolutePath().getParent()).loadScene(wanted);
+            Game game = new Game(next, log, input);
+            game.sceneName = saved != null ? Json.string(saved, "scene", "Main") : wanted;
+            game.saveName = saveName;
+            game.values.putAll(values);
+            game.timeScale = timeScale;
+            game.hour = hour;
+            game.dayLength = dayLength;
+            if (fadeLength > 0 && saved == null) game.fadeInLength = fadeLength; // came through a fade: fade back in
+            game.start(scriptsFolder);
+            if (saved != null) Snapshot.restore(game, saved);
+            stop();
+            successor = game;
+        } catch (IOException | RuntimeException e) {
+            log.error("Couldn't " + (saved != null ? "load the saved game" : "open the scene \"" + wanted + "\"") + ": " + e.getMessage());
+        }
+    }
+
+    private Path saveFile(String slot) {
+        String clean = slot.replaceAll("[^A-Za-z0-9 _-]", "_");
+        return sev7n.Platform.dataFolder().resolve("saves").resolve(saveName).resolve(clean + ".json");
+    }
+
+    void saveGame(String slot) throws IOException {
+        Path file = saveFile(slot);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, Json.write(Snapshot.capture(this)), StandardCharsets.UTF_8);
+    }
+
+    /** Loads a saved game at the end of this frame; false if there's no save in that slot. */
+    boolean loadGame(String slot) throws IOException {
+        Path file = saveFile(slot);
+        if (!Files.exists(file)) return false;
+        loadRequest = Json.object(Json.parse(Files.readString(file, StandardCharsets.UTF_8)));
+        return true;
+    }
+
+    boolean hasSave(String slot) {
+        return Files.exists(saveFile(slot));
+    }
+
+    boolean deleteSave(String slot) throws IOException {
+        return Files.deleteIfExists(saveFile(slot));
+    }
+
+    /** A copy of a prefab (with its behaviours started), at a position. */
+    EntityProxy spawnPrefab(String name, Vec3 position) throws IOException {
+        Map<String, Object> data = Project.openOrCreate(scriptsFolder.toAbsolutePath().getParent()).loadPrefab(name);
+        Entity entity = SceneSerializer.placeFamily(scene, data, name, position);
+        List<Entity> family = new ArrayList<>(List.of(entity));
+        family.addAll(sev7n.scene.Hierarchy.descendants(scene, entity));
+        for (Entity member : family) {
+            for (Behaviour component : member.getAll(Behaviour.class)) {
+                BehaviourInstance instance = attach(member, component.script, 0);
+                seven.callMethod(instance, "start");
+            }
+        }
+        return proxy(entity);
     }
 
     public Scene scene() {
@@ -233,8 +420,10 @@ public final class Game {
         return proxy(entity);
     }
 
+    /** Removes an entity (and its children) at the end of the frame. */
     void destroy(Entity entity) {
         destroyQueue.add(entity);
+        destroyQueue.addAll(sev7n.scene.Hierarchy.descendants(scene, entity));
     }
 
     BehaviourInstance addBehaviour(Entity entity, String name, int line) {
@@ -436,6 +625,12 @@ public final class Game {
         }
     }
 
+    /** True while an entity's ragdoll lies still (it fell and stopped moving); false if it's moving or not limp. */
+    public boolean ragdollResting(Entity entity) {
+        Limp body = limp.get(entity);
+        return body != null && body.sim().resting();
+    }
+
     private Limp goLimp(Entity entity, Ragdoll ragdoll) {
         entity.transform.position.set(ragdoll.poseOrigin); // where it was in the pose it falls from
         Vec3 velocity = new Vec3(ragdoll.pushX, ragdoll.pushY, ragdoll.pushZ);
@@ -528,10 +723,15 @@ public final class Game {
         }
     }
 
-    private void notifyCollision(Entity self, Entity other) {
+    /** entity.send(...): calls a function on every behaviour of an entity that has it. */
+    void send(Entity target, String method, Object... args) {
+        notify(target, method, args);
+    }
+
+    private void notifyCollision(Entity self, Entity other, String method) {
         if (destroyQueue.contains(self)) return;
         for (BehaviourInstance instance : new ArrayList<>(behaviours.getOrDefault(self, List.of()))) {
-            seven.callMethod(instance, "onCollide", proxy(other));
+            seven.callMethod(instance, method, proxy(other));
         }
     }
 

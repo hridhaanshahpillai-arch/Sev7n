@@ -83,6 +83,7 @@ public final class GraphFile {
         return switch (value) {
             case Vec3 v -> Json.vec3(v);
             case Color c -> Json.color(c);
+            case List<?> list -> new ArrayList<>(); // lists always start empty
             case null -> null;
             default -> value; // numbers, strings, booleans
         };
@@ -150,6 +151,8 @@ public final class GraphFile {
             case NUMBER -> raw instanceof Double d ? d : 0.0;
             case BOOL -> raw instanceof Boolean b ? b : false;
             case STRING -> raw instanceof String s ? s : "";
+            case LIST -> new ArrayList<>();
+            case ENTITY -> null;
             default -> raw; // ANY keeps whatever was saved (number or text)
         };
     }
