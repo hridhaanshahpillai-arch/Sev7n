@@ -8,6 +8,7 @@ import sev7n.scene.Entity;
 import sev7n.scene.Hud;
 import sev7n.scene.MeshRenderer;
 import sev7n.scene.ParticleEmitter;
+import sev7n.scene.Terrain;
 
 import java.awt.Color;
 import java.io.IOException;
@@ -42,6 +43,9 @@ final class EngineApi {
         installInput(seven, game.input());
         installScene(seven, game);
         seven.defineNative("time", 0, 0, args -> game.time());
+        // cameraForward() / cameraRight(): where the main camera looks, flat on the ground (move a character from the player's view)
+        seven.defineNative("cameraForward", 0, 0, args -> CameraRig.flatForward(game.scene()));
+        seven.defineNative("cameraRight", 0, 0, args -> CameraRig.flatRight(game.scene()));
         installTweens(seven, game);
         installPhysics(seven, game);
         installNpcs(seven, game);
@@ -50,6 +54,39 @@ final class EngineApi {
         installWorldUi(seven, game);
         installSound(seven, game);
         installScenes(seven, game);
+        installNetwork(seven, game);
+    }
+
+    /**
+     * Multiplayer. connect() hosts, or joins if this PC already hosts: run the game twice (Play, then
+     * File > Play in Window) and both windows play together. host([port]) / join([address], [port]) choose.
+     * share(key, value) / shared(player, key) for things everyone sees; sendMessage(name, [value]) for events.
+     * Scripts get onConnected(id), onPlayerJoined(id), onPlayerLeft(id), onMessage(name, value, from), onDisconnected().
+     */
+    private static void installNetwork(Interpreter seven, Game game) {
+        seven.defineNative("connect", 0, 1, args -> game.network().connect(args.has(0) ? (int) args.number(0) : Network.DEFAULT_PORT));
+        seven.defineNative("host", 0, 1, args -> game.network().host(args.has(0) ? (int) args.number(0) : Network.DEFAULT_PORT));
+        seven.defineNative("join", 0, 2, args -> game.network().join(args.has(0) ? args.string(0) : "localhost", args.has(1) ? (int) args.number(1) : Network.DEFAULT_PORT));
+        seven.defineNative("disconnect", 0, 0, args -> {
+            game.network().close();
+            return null;
+        });
+        seven.defineNative("isConnected", 0, 0, args -> game.network().connected());
+        seven.defineNative("isHost", 0, 0, args -> game.network().isHost());
+        seven.defineNative("playerId", 0, 0, args -> (double) game.network().playerId());
+        seven.defineNative("players", 0, 0, args -> game.network().players());
+        seven.defineNative("sendMessage", 1, 2, args -> {
+            game.network().send(args.string(0), args.has(1) ? args.get(1) : null);
+            return null;
+        });
+        seven.defineNative("share", 2, 2, args -> {
+            game.network().share(args.string(0), args.get(1));
+            return null;
+        });
+        seven.defineNative("shared", 2, 3, args -> {
+            Object value = game.network().shared((int) args.number(0), args.string(1));
+            return value != null ? value : (args.has(2) ? args.get(2) : null);
+        });
     }
 
     /** Levels, saved games, values kept between them, and prefabs. */
@@ -290,41 +327,39 @@ final class EngineApi {
         throw args.error("expected a color like #ff5555, not " + Values.typeName(args.get(index)));
     }
 
-    /** Sound effects and music (.wav files in the project, e.g. "assets/sounds/hit.wav"). */
+    /** Sound effects and music (.wav or .ogg files in the project, e.g. "assets/sounds/hit.wav"), through the audio engine. */
     private static void installSound(Interpreter seven, Game game) {
-        seven.defineNative("playSound", 1, 2, args -> {
+        // playSound(path, [volume], [pitch], [bus]): plays once; returns the sound, to change or stop it while it plays
+        seven.defineNative("playSound", 1, 4, args -> {
+            String bus = args.has(3) ? bus(args, 3, game) : "Effects";
             try {
-                game.sound().play(args.string(0), args.has(1) ? args.number(1) : 1);
+                return new SoundProxy(game.sound().play(args.string(0), args.has(1) ? args.number(1) : 1, args.has(2) ? args.number(2) : 1, bus), null);
+            } catch (IllegalArgumentException e) {
+                throw args.error(e.getMessage());
+            }
+        });
+        // playSoundAt(path, position, [volume], [range], [pitch]): a sound somewhere in the world, heard from the main
+        // camera: quieter further away (silent past 'range', 30 if left out), from the left or right, muffled behind
+        seven.defineNative("playSoundAt", 2, 5, args -> {
+            Vec3 at = args.vec3(1);
+            try {
+                return new SoundProxy(game.sound().playAt(args.string(0), at, args.has(2) ? args.number(2) : 1,
+                        args.has(3) ? args.number(3) : 30, args.has(4) ? args.number(4) : 1), at.copy());
+            } catch (IllegalArgumentException e) {
+                throw args.error(e.getMessage());
+            }
+        });
+        // playMusic(path, [volume], [fade]): music on repeat; different music crossfades over 'fade' seconds
+        seven.defineNative("playMusic", 1, 3, args -> {
+            try {
+                game.sound().playMusic(args.string(0), args.has(1) ? args.number(1) : 0.6, args.has(2) ? args.number(2) : 0);
             } catch (IllegalArgumentException e) {
                 throw args.error(e.getMessage());
             }
             return null;
         });
-        // playSoundAt(path, position, [volume], [range]): a sound somewhere in the world, quieter further from the camera
-        // (silent past 'range', 30 if left out) and coming from the left or right
-        seven.defineNative("playSoundAt", 2, 4, args -> {
-            Entity listener = game.scene().mainCamera();
-            double volume = args.has(2) ? args.number(2) : 1;
-            double range = args.has(3) ? args.number(3) : 30;
-            double[] placed = listener == null ? new double[] {1, 0}
-                    : Sound.placed(args.vec3(1), listener.transform.position, listener.transform.right(), range);
-            try {
-                game.sound().play(args.string(0), volume * placed[0], placed[1]);
-            } catch (IllegalArgumentException e) {
-                throw args.error(e.getMessage());
-            }
-            return null;
-        });
-        seven.defineNative("playMusic", 1, 2, args -> {
-            try {
-                game.sound().playMusic(args.string(0), args.has(1) ? args.number(1) : 0.6);
-            } catch (IllegalArgumentException e) {
-                throw args.error(e.getMessage());
-            }
-            return null;
-        });
-        seven.defineNative("stopMusic", 0, 0, args -> {
-            game.sound().stopMusic();
+        seven.defineNative("stopMusic", 0, 1, args -> {
+            game.sound().stopMusic(args.has(0) ? args.number(0) : 0);
             return null;
         });
         seven.defineNative("setVolume", 1, 1, args -> {
@@ -332,6 +367,23 @@ final class EngineApi {
             return null;
         });
         seven.defineNative("volume", 0, 0, args -> game.sound().masterVolume());
+        // setBusVolume("Music", 0.5) / busVolume("Music"): the Audio Mixer's groups (Music, Effects, Ambient, Voice, UI)
+        seven.defineNative("setBusVolume", 2, 2, args -> {
+            game.sound().mixer().setBusVolume(bus(args, 0, game), args.number(1));
+            return null;
+        });
+        seven.defineNative("busVolume", 1, 1, args -> game.sound().mixer().bus(bus(args, 0, game)).volume());
+        seven.defineNative("muteBus", 2, 2, args -> {
+            game.sound().mixer().setBusMuted(bus(args, 0, game), Values.isTruthy(args.get(1)));
+            return null;
+        });
+    }
+
+    /** A bus name, checked (with the right names listed if it's wrong). */
+    private static String bus(sev7n.lang.runtime.Args args, int index, Game game) {
+        String name = args.string(index);
+        for (String bus : sev7n.audio.AudioMixer.BUSES) if (bus.equalsIgnoreCase(name)) return bus;
+        throw args.error("there's no bus '" + name + "'. The buses are " + String.join(", ", sev7n.audio.AudioMixer.BUSES));
     }
 
     private static void installNpcs(Interpreter seven, Game game) {
@@ -373,6 +425,30 @@ final class EngineApi {
             List<Object> found = new ArrayList<>();
             for (Entity e : Physics.overlapSphere(game.scene(), args.vec3(0), args.number(1))) found.add(game.proxy(e));
             return found;
+        });
+        // groundHeight(x, z): how high the terrain is there (in the world), or none off every terrain
+        seven.defineNative("groundHeight", 2, 2, args -> {
+            double h = Ground.heightAt(Ground.terrains(game.scene()), args.number(0), args.number(1));
+            return Double.isNaN(h) || Double.isInfinite(h) ? null : (Object) h;
+        });
+        // sculpt("raise" | "lower" | "smooth" | "flatten", position, radius, [amount]): changes the land while
+        // the game runs (craters, digging, building up). Flatten levels to position.y. True if any land changed.
+        seven.defineNative("sculpt", 3, 4, args -> {
+            Terrain.Brush brush;
+            try {
+                brush = Terrain.Brush.valueOf(args.string(0).toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw args.error("unknown brush '" + args.string(0) + "'. Use \"raise\", \"lower\", \"smooth\" or \"flatten\"");
+            }
+            Vec3 at = args.vec3(1);
+            double radius = args.number(2);
+            double amount = args.has(3) ? args.number(3) : brush == Terrain.Brush.RAISE || brush == Terrain.Brush.LOWER ? 1 : 0.5;
+            boolean changed = false;
+            for (Entity e : Ground.terrains(game.scene())) {
+                Vec3 p = e.transform.position;
+                changed |= e.get(Terrain.class).sculpt(brush, at.x - p.x, at.z - p.z, radius, amount, at.y - p.y);
+            }
+            return changed;
         });
     }
 
@@ -417,6 +493,11 @@ final class EngineApi {
         seven.defineNative("mouseLocked", 0, 0, args -> input.mouseLocked());
         seven.defineNative("mouseMoveX", 0, 0, args -> input.mouseMoveX());
         seven.defineNative("mouseMoveY", 0, 0, args -> input.mouseMoveY());
+        // gamepads: padConnected(), padButton("A") held, padPressed("A") this frame, padAxis("LX") -1..1 / ("RT") 0..1
+        seven.defineNative("padConnected", 0, 0, args -> input.padConnected());
+        seven.defineNative("padButton", 1, 1, args -> input.padHeld(args.string(0)));
+        seven.defineNative("padPressed", 1, 1, args -> input.padPressed(args.string(0)));
+        seven.defineNative("padAxis", 1, 1, args -> input.padAxis(args.string(0)));
     }
 
     private static void installScene(Interpreter seven, Game game) {

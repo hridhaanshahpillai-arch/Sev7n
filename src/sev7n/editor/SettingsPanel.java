@@ -144,6 +144,29 @@ final class SettingsPanel {
         }
 
         ImGui.separator();
+        Widgets.label("Shadows");
+        if (ImGui.beginCombo("##shadows", g.shadows.label)) {
+            for (RenderSettings.Shadows quality : RenderSettings.Shadows.values()) {
+                if (ImGui.selectable(quality.label, quality == g.shadows)) {
+                    g.shadows = quality;
+                    changedGraphics();
+                }
+                if (ImGui.isItemHovered()) ImGui.setTooltip(quality.description);
+            }
+            ImGui.endCombo();
+        }
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Shadows from the scene's Directional Light (turn them off for one light in its Inspector)");
+        if (g.shadows != RenderSettings.Shadows.OFF) {
+            int reach = (int) Math.round(g.shadowDistance);
+            int newReach = percentSlider("Shadow distance", reach, 10, 300, "%d units",
+                    "How far from the camera shadows are drawn. Shorter is sharper; they fade out past it");
+            if (newReach != reach) {
+                g.shadowDistance = newReach;
+                changedGraphics();
+            }
+        }
+
+        ImGui.separator();
         boolean fog = Widgets.checkbox("Fog", g.fog, "Far things fade into the camera's background color");
         if (fog != g.fog) {
             g.fog = fog;

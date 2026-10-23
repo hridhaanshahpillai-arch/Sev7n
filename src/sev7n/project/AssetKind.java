@@ -16,6 +16,7 @@ public enum AssetKind {
     ARCHIVE("Archive", Set.of("zip", "rar", "7z", "tar", "gz", "tgz")),
     MATERIAL("Material", Set.of("mtl")),
     SCRIPT("Script", Set.of("7n", "8s")),
+    ANIMATION("Animation", Set.of("anim")),
     OTHER("File", Set.of());
 
     public final String label;

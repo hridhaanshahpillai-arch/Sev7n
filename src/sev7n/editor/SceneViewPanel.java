@@ -22,6 +22,7 @@ import sev7n.render.RenderView;
 import sev7n.render.SceneRenderer;
 import sev7n.scene.Camera;
 import sev7n.scene.Entity;
+import sev7n.scene.Terrain;
 import sev7n.scene.Tilemap;
 import sev7n.ui.Theme;
 
@@ -31,6 +32,7 @@ import sev7n.ui.Theme;
  *   3D: right-drag or Alt+left-drag = orbit · middle-drag = pan · wheel = zoom · F = focus
  *   2D: right- or middle-drag = pan · wheel = zoom
  *   while painting a tilemap: click/drag = paint · Shift = erase · Esc = stop
+ *   while sculpting terrain: drag = brush · Shift = lower · Ctrl = smooth · [ ] = brush size · Esc = stop
  */
 final class SceneViewPanel {
 
@@ -107,10 +109,13 @@ final class SceneViewPanel {
         drawEntityIcons(origin, width, height, view);
         drawToolbar(origin);
         Entity tilemap = ctx.paintingTilemap();
-        boolean gizmoBusy = tilemap == null && drawGizmo(origin, width, height, view);
+        Entity terrain = ctx.sculptingTerrain();
+        boolean gizmoBusy = tilemap == null && terrain == null && drawGizmo(origin, width, height, view);
         handleNavigation(hovered, height);
         if (tilemap != null) {
             paintTiles(tilemap, hovered, origin, width, height, view);
+        } else if (terrain != null) {
+            sculptTerrain(terrain, hovered, origin, width, height, view);
         } else if (hovered && !gizmoBusy && !navigating && !ImGui.isAnyItemHovered()
                 && ImGui.isMouseClicked(0) && !ImGui.getIO().getKeyAlt()) {
             ImVec2 mouse = ImGui.getMousePos();
@@ -310,6 +315,104 @@ final class SceneViewPanel {
         }
         int color = EditorStyle.pack(erase ? Theme.ERROR : Theme.ACCENT);
         ImGui.getWindowDrawList().addQuad(screen[0], screen[1], screen[2], screen[3], screen[4], screen[5], screen[6], screen[7], color, 2);
+    }
+
+    // ---------------------------------------------------------------- terrain sculpting
+
+    /** The height Flatten levels to: where the current stroke started (NaN between strokes). */
+    private double flattenTo = Double.NaN;
+
+    /**
+     * Sculpts the land under the mouse while the button is held: the chosen brush, or
+     * Shift = Lower and Ctrl = Smooth for quick changes. The brush shows as a circle on the land.
+     */
+    private void sculptTerrain(Entity entity, boolean hovered, ImVec2 origin, float width, float height, RenderView view) {
+        Terrain terrain = entity.get(Terrain.class);
+        ImGuiIO io = ImGui.getIO();
+        Terrain.Brush brush = io.getKeyCtrl() ? Terrain.Brush.SMOOTH : io.getKeyShift() ? Terrain.Brush.LOWER : ctx.brush;
+        drawBanner(origin, width, "Sculpting " + entity.name + " (" + brush.label + ")  ·  Shift lowers  ·  Ctrl smooths  ·  [ ] size  ·  Esc stops");
+        if (ImGui.isKeyPressed(ImGuiKey.Escape, false)) {
+            ctx.sculpt(null);
+            return;
+        }
+        if (!io.getWantTextInput()) {
+            if (ImGui.isKeyPressed(ImGuiKey.LeftBracket)) ctx.brushSize = Math.max(0.5, ctx.brushSize / 1.15);
+            if (ImGui.isKeyPressed(ImGuiKey.RightBracket)) ctx.brushSize = Math.min(500, ctx.brushSize * 1.15);
+        }
+        if (!ImGui.isMouseDown(0)) flattenTo = Double.NaN;
+        if (!hovered || navigating) return;
+
+        ImVec2 mouse = ImGui.getMousePos();
+        Vector3f hit = terrainUnderMouse(entity, terrain, mouse.x - origin.x, mouse.y - origin.y, width, height, view);
+        if (hit == null) return;
+        Vec3 p = entity.transform.position;
+        double x = hit.x - p.x, z = hit.z - p.z;
+        drawBrush(entity, terrain, x, z, ctx.brushSize, origin, width, height, view, brush == Terrain.Brush.LOWER ? Theme.ERROR : Theme.ACCENT);
+
+        if (ImGui.isMouseDown(0) && !io.getKeyAlt() && !ImGui.isAnyItemHovered()) {
+            if (Double.isNaN(flattenTo)) flattenTo = terrain.heightAt(x, z);
+            double dt = Math.min(io.getDeltaTime(), 0.05);
+            // Raise/Lower: up to 12 units a second at full strength; Smooth/Flatten blend toward their goal
+            double amount = brush == Terrain.Brush.RAISE || brush == Terrain.Brush.LOWER
+                    ? ctx.brushStrength * 12 * dt
+                    : Math.min(1, ctx.brushStrength * 8 * dt);
+            if (terrain.sculpt(brush, x, z, ctx.brushSize, amount, flattenTo)) ctx.markDirty();
+        }
+    }
+
+    /** Where the mouse points on the terrain, in the world, or null if it misses. */
+    private static Vector3f terrainUnderMouse(Entity entity, Terrain terrain, float mouseX, float mouseY,
+                                              float width, float height, RenderView view) {
+        Vector3f origin = new Vector3f();
+        Vector3f direction = new Vector3f();
+        new Matrix4f(view.projection()).mul(view.view()).unprojectRay(mouseX, height - mouseY,
+                new int[] {0, 0, (int) width, (int) height}, origin, direction);
+        direction.normalize();
+        Vec3 p = entity.transform.position;
+        // march along the ray until it goes under the land, then home in on the crossing
+        float step = (float) Math.max(0.25, terrain.size / Math.max(2, terrain.resolution) / 2);
+        float reach = (float) (terrain.size * 2 + origin.distance((float) p.x, (float) p.y, (float) p.z));
+        float last = 0;
+        for (float t = 0; t <= reach; t += step) {
+            float x = origin.x + direction.x * t, y = origin.y + direction.y * t, z = origin.z + direction.z * t;
+            double ground = terrain.heightAt(x - p.x, z - p.z);
+            if (!Double.isNaN(ground) && y <= ground + p.y) {
+                float low = last, high = t;
+                for (int i = 0; i < 16; i++) {
+                    float mid = (low + high) / 2;
+                    float mx = origin.x + direction.x * mid, mz = origin.z + direction.z * mid;
+                    double g = terrain.heightAt(mx - p.x, mz - p.z);
+                    if (!Double.isNaN(g) && origin.y + direction.y * mid <= g + p.y) high = mid;
+                    else low = mid;
+                }
+                return new Vector3f(direction).mul(high).add(origin);
+            }
+            last = t;
+        }
+        return null;
+    }
+
+    /** The brush as a circle lying on the land. */
+    private static void drawBrush(Entity entity, Terrain terrain, double x, double z, double radius, ImVec2 origin, float width,
+                                  float height, RenderView view, java.awt.Color color) {
+        Matrix4f viewProjection = new Matrix4f(view.projection()).mul(view.view());
+        Vec3 p = entity.transform.position;
+        int segments = 48;
+        float[] points = new float[(segments + 1) * 2];
+        for (int i = 0; i <= segments; i++) {
+            double angle = Math.PI * 2 * i / segments;
+            double px = x + Math.cos(angle) * radius, pz = z + Math.sin(angle) * radius;
+            double ground = terrain.heightAt(px, pz);
+            if (Double.isNaN(ground)) ground = terrain.heightAt(x, z);
+            Vector4f clip = viewProjection.transform(new Vector4f((float) (px + p.x), (float) (ground + p.y + 0.05), (float) (pz + p.z), 1));
+            if (clip.w <= 0.01f) return;
+            points[i * 2] = origin.x + (clip.x / clip.w * 0.5f + 0.5f) * width;
+            points[i * 2 + 1] = origin.y + (1 - (clip.y / clip.w * 0.5f + 0.5f)) * height;
+        }
+        ImDrawList draw = ImGui.getWindowDrawList();
+        for (int i = 0; i < segments; i++) {
+            draw.addLine(points[i * 2], points[i * 2 + 1], points[i * 2 + 2], points[i * 2 + 3], EditorStyle.pack(color), 2);
+        }
     }
 
     private static void drawBanner(ImVec2 origin, float width, String text) {

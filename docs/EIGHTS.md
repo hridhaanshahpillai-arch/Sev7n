@@ -1,4 +1,4 @@
-# Eights: visual scripting (v0.7.5 alpha)
+# Eights: visual scripting (v0.7.6 alpha)
 
 Eights lets you make behaviours by **connecting nodes** instead of typing code,
 like Unreal's Blueprints. An Eights graph (`.8s`) is a behaviour, just like a Seven script (`.7n`):

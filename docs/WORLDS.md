@@ -1,4 +1,4 @@
-# First-person and Open Worlds (v0.7.5 alpha)
+# First-person and Open Worlds (v0.8 alpha)
 
 Everything you need for first-person games and big open worlds: mouse-look, shooting, and land
 to explore. This guide has two ready-to-use scripts to copy into your project.
@@ -179,6 +179,44 @@ make the same land.
 Characters walk on terrain (up hills and down valleys), ragdolls land on it, raycasts hit it,
 `solidAt` knows it's there, and NPCs find their way across it.
 
+### Sculpting
+
+Shape the land by hand: select the terrain, click **Sculpt** in the Inspector, pick a brush and
+drag over the land in the Scene view. A circle shows where the brush is.
+
+| Brush | What it does |
+|-------|--------------|
+| **Raise** | builds the land up: hills, mountains, ridges |
+| **Lower** | digs it down: valleys, lakes, pits |
+| **Smooth** | softens bumps and sharp edges |
+| **Flatten** | levels the land to the height where the stroke started: paths, building spots |
+
+| Key | While sculpting |
+|-----|-----------------|
+| **Shift** + drag | lower, whichever brush is picked |
+| **Ctrl** + drag | smooth |
+| **[** / **]** | brush smaller / bigger |
+| **Ctrl+Z** | undo the last stroke |
+| **Esc** | stop sculpting |
+
+**Brush size** and **Strength** are in the Inspector. Sculpting goes on top of the generated land,
+so you can still change Height, Hill size or Detail afterwards and keep what you sculpted.
+**Clear sculpting** takes it all away. It's saved with the scene.
+
+Scripts can change the land while the game runs, like a crater where a bomb went off:
+
+```seven
+func onExplode(at) {
+    sculpt("lower", at, 4, 2)        // brush, position, radius, [amount]
+}
+
+var y = groundHeight(x, z)           // how high the land is there (none off the land)
+```
+
+`sculpt` takes `"raise"`, `"lower"`, `"smooth"` or `"flatten"` (which levels to the position's
+height). In Eights: **Sculpt Terrain** and **Ground Height** (World). NPCs plan their paths when the
+game starts, so they won't know about land a script changes later.
+
 ### Seeing far
 
 Turn on **fog** in Settings (click the 7): it fades the distance into the sky colour, and anything
@@ -227,7 +265,12 @@ Scripts can change any light:
 entity.lightIntensity = 0.5      // on an object with a Directional Light
 entity.lightColor = #ffd9a0
 entity.lightAmbient = 0.2
+entity.lightShadows = true       // shadows on or off (how sharp: Settings > Shadows)
+entity.lightShadowStrength = 0.8 // how dark shadows are, 0 to 1
 ```
+
+The sun casts shadows from the land, trees and every object, and they move with it as the day
+goes by. Long evening shadows come free with the script above.
 
 ## Limits for now
 

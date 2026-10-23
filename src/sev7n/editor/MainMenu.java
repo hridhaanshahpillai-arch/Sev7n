@@ -28,6 +28,12 @@ final class MainMenu {
 
         void openSettings();
 
+        /** Window > Audio, on a tab: "Mixer" or "Sound Maker". */
+        void openAudio(String tab);
+
+        /** Window > Animation: keyframe animations for the selected object. */
+        void openAnimation();
+
         /** Closes this project and goes back to the Sev7n Hub. */
         void openHub();
     }
@@ -102,6 +108,9 @@ final class MainMenu {
         }
         if (ImGui.beginMenu("Window")) {
             if (ImGui.menuItem("Settings...", "Ctrl+,")) actions.openSettings();
+            if (ImGui.menuItem("Animation")) actions.openAnimation();
+            if (ImGui.menuItem("Audio Mixer...")) actions.openAudio("Mixer");
+            if (ImGui.menuItem("Sound Maker...")) actions.openAudio("Sound Maker");
             ImGui.separator();
             if (ImGui.menuItem("Reset Layout")) actions.resetLayout();
             ImGui.endMenu();
@@ -119,6 +128,9 @@ final class MainMenu {
             if (ImGui.menuItem("First-person and Open Worlds")) actions.openGuide("WORLDS.md");
             if (ImGui.menuItem("Scenes, Saves and Prefabs")) actions.openGuide("SCENES.md");
             if (ImGui.menuItem("HUD, Menus and Sound")) actions.openGuide("HUD.md");
+            if (ImGui.menuItem("Sound and Music")) actions.openGuide("AUDIO.md");
+            if (ImGui.menuItem("Cameras and Controls")) actions.openGuide("CONTROLS.md");
+            if (ImGui.menuItem("Multiplayer")) actions.openGuide("MULTIPLAYER.md");
             if (ImGui.menuItem("Ragdolls")) actions.openGuide("RAGDOLLS.md");
             if (ImGui.menuItem("NPCs and AI")) actions.openGuide("NPC.md");
             if (ImGui.menuItem("Particle Effects")) actions.openGuide("EFFECTS.md");

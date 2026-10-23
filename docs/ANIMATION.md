@@ -1,12 +1,84 @@
-# Animation (v0.5 alpha)
+# Animation (v0.8 alpha)
 
-Three ways to make things move without writing the math yourself:
+Four ways to make things move without writing the math yourself:
 
 | | For | How |
 |-|-----|-----|
+| **Keyframe animation** | doors, platforms, lights, coins, cutscenes | make it on a timeline in the **Animation window**; an **Animation Player** plays it |
 | **Animated 3D models** | characters that walk, run, swing swords | an **Animator** plays the animations inside a `.glb` / `.gltf` |
 | **Tweens** | smooth moves, spins, grows, color fades | one line of script: `tween(...)` |
 | **Sprite animation** | 2D characters from sprite sheets | a **Sprite Animator** (see [2D games](2D.md)) |
+
+## Keyframe animation: the Animation window
+
+Make an object move, turn, grow, change colour, dim a light or switch on and off over time, by
+setting **keys** on a timeline. Sev7n fills in the movement between them.
+
+1. Select the object and open **Window > Animation** (it opens next to the Console).
+2. Click **Create animation for ...**. That makes `assets/animations/<name>.anim`, adds an
+   **Animation Player** to the object, and turns on **Record**.
+3. With Record on, move, turn or recolour the object (gizmo or Inspector): a key appears at the
+   current time.
+4. Drag the time along the ruler, change the object again: another key.
+5. Press **Play** to watch it. It loops if **Loop** is ticked.
+
+| On the timeline | |
+|-----------------|-|
+| click or drag the ruler | see the object at that moment (Ctrl: without snapping) |
+| **Add property** | a track for Position, Rotation, Scale, Color, Light brightness or Active |
+| double-click a track | add a key there |
+| drag a key | move it in time |
+| click a key | change its time, value and curve below the timeline |
+| right-click a key | pick its curve, or delete it (Delete works too) |
+| **x** next to a track | remove the whole track |
+| **Add event** | call a script function at that moment (see below) |
+
+The curve says how a key moves to the next: **linear** (steady), **inOutSine** (eases in and
+out, the default), **outBack** (overshoots a little), **outBounce**, **outElastic**, or **step**
+(jumps to the next key's value when it gets there).
+
+While the window shows an animation, the object is posed as it would be at that time. Its real
+values come back when you select something else, close the window, save or press Play. Clips save
+by themselves.
+
+Position, rotation and scale keys are relative to the object's parent if it has one, so an animated
+part (a spinning wheel, a swinging door on a moving train) moves along with its parent.
+
+### Animation Player
+
+| Setting | What it does |
+|---------|--------------|
+| **Animation** | the .anim clip |
+| **Play on start** | starts by itself when the game starts |
+| **Speed** | 1 = normal, 2 = twice as fast, -1 = backwards |
+
+Animated platforms move before physics runs, so things standing on them ride along.
+
+### Events
+
+An event calls a function in the object's scripts when the animation passes its moment:
+footsteps, a creaking door, a cutscene's end. Add one with **Add event**, click its flag on the
+Events row to set its time and function name.
+
+```seven
+behaviour Door {
+    func onOpened() {
+        playSound("assets/sounds/creak.wav")
+    }
+}
+```
+
+### From scripts
+
+```seven
+entity.playClip()                  // plays its Animation Player's clip from the start
+find("Gate").playClip("gate_open") // another clip: assets/animations/gate_open.anim (or a full path)
+entity.stopClip()                  // stops where it is
+if entity.clipPlaying { }          // still going?
+var t = entity.clipTime            // seconds in
+```
+
+In Eights: **Play Clip**, **Play Clip Named**, **Stop Clip** and **Is Clip Playing** (Characters).
 
 ## Animated 3D models
 

@@ -117,9 +117,16 @@ public final class SceneRenderer implements AutoCloseable {
 
     public void render(Scene scene, RenderView view, Color background, Overlays overlays) {
         assets.setPixelated(settings.pixelatedTextures);
-        gpu.begin(frame(scene, view, background));
         eye = view.eye();
-        drawMeshes(scene);
+        Map<Entity, Posed> animated = poseCharacters(scene);
+        Entity sun = sun(scene);
+        Vector3f lightDirection = toVector(sun != null ? sun.transform.forward() : DEFAULT_LIGHT_DIRECTION);
+        GraphicsBackend.Shadows shadows = drawShadowMap(scene, view, sun, lightDirection, animated);
+        SkyLook sky = skyLook(scene, view, lightDirection);
+        if (sky != null) background = sky.horizon(); // the fog fades into the horizon, so faraway things melt into the sky
+        gpu.begin(frame(sun, lightDirection, view, background, shadows));
+        if (sky != null) drawSky(view, sky, lightDirection);
+        drawMeshes(scene, animated, false);
         if (overlays.grid()) drawGrid(view);
         drawSprites(scene, view);
         if (overlays.colliders()) drawColliders(scene);
@@ -132,17 +139,194 @@ public final class SceneRenderer implements AutoCloseable {
         gpu.end();
     }
 
-    /** The first active Light in the scene lights everything; without one, a soft default light does. */
-    private GraphicsBackend.Frame frame(Scene scene, RenderView view, Color background) {
-        for (Entity entity : scene.entities()) {
-            Light light = entity.get(Light.class);
-            if (!entity.active || light == null) continue;
-            Vec3 direction = entity.transform.forward();
-            float intensity = (float) light.intensity;
-            Vector3f color = new Vector3f(light.color.getRed(), light.color.getGreen(), light.color.getBlue()).mul(intensity / 255f);
-            return new GraphicsBackend.Frame(view, background, toVector(direction), color, (float) light.ambient, settings);
+    // ---------------------------------------------------------------- sky
+
+    /** This frame's sky colours (after day and night) and whether the sun shows. */
+    private record SkyLook(Color top, Color horizon, Color ground, boolean sun, Color sunColor) { }
+
+    /** Sky pictures by colours (a sun moving through the day changes them slowly). The oldest go once there are many;
+     *  they were last used dozens of frames ago, so no frame still in flight needs them. */
+    private final Map<String, GpuTexture> skyTextures = new java.util.LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, GpuTexture> eldest) {
+            if (size() <= 24) return false;
+            eldest.getValue().close();
+            return true;
         }
-        return new GraphicsBackend.Frame(view, background, toVector(DEFAULT_LIGHT_DIRECTION), new Vector3f(0.9f), 0.3f, settings);
+    };
+
+    /** The main camera's sky, coloured for the time of day, or null (no sky, or a flat 2D view). */
+    private static SkyLook skyLook(Scene scene, RenderView view, Vector3f lightDirection) {
+        if (view.orthographic()) return null;
+        Entity cameraEntity = scene.mainCamera();
+        sev7n.scene.Camera camera = cameraEntity == null ? null : cameraEntity.get(sev7n.scene.Camera.class);
+        if (camera == null || !camera.sky || camera.orthographic) return null;
+        Color top = camera.skyTop, horizon = camera.skyHorizon, ground = camera.skyGround;
+        Color sunColor = new Color(255, 246, 225);
+        if (camera.dayNight) {
+            float height = -lightDirection.y;                                   // the sun's height: 1 overhead, 0 on the horizon
+            float day = smoothstep(-0.18f, 0.22f, height);                       // 0 at night, 1 by day
+            float dusk = Math.max(0, 1 - Math.abs(height - 0.02f) / 0.28f);      // strongest as the sun touches the horizon
+            top = mix(new Color(0x0B1026), top, day);
+            horizon = mix(mix(new Color(0x1C2340), horizon, day), new Color(0xF2955A), dusk * 0.65f);
+            ground = mix(new Color(0x101218), ground, day);
+            sunColor = mix(sunColor, new Color(255, 170, 110), dusk);
+        }
+        return new SkyLook(top, horizon, ground, camera.sun, sunColor);
+    }
+
+    /**
+     * The sky behind everything: a card just past the near plane filling the view, showing the slice of the
+     * sky gradient between the view's top and bottom edges, then the sun where the light comes from.
+     * Neither writes depth and both go first, so everything else is drawn in front of them.
+     */
+    private void drawSky(RenderView view, SkyLook sky, Vector3f lightDirection) {
+        sky = new SkyLook(coarse(sky.top()), coarse(sky.horizon()), coarse(sky.ground()), sky.sun(), sky.sunColor());
+        String key = sky.top().getRGB() + ":" + sky.horizon().getRGB() + ":" + sky.ground().getRGB();
+        GpuTexture skyTexture = skyTextures.get(key);
+        if (skyTexture == null) {
+            skyTexture = gpu.texture(skyPicture(sky), false);
+            skyTextures.put(key, skyTexture);
+        }
+        Matrix4f p = view.projection();
+        float near = p.m32() / (p.m22() - 1);
+        float d = Math.max(0.02f, near * 1.5f);
+        Matrix4f camera = view.view().invert(new Matrix4f());
+        Vector3f forward = camera.transformDirection(new Vector3f(0, 0, -1)).normalize();
+        float pitch = (float) Math.toDegrees(Math.asin(Math.max(-1, Math.min(1, forward.y))));
+        float halfFov = (float) Math.toDegrees(Math.atan(1 / p.m11()));
+        float vTop = clamp01((90 - (pitch + halfFov)) / 180), vBottom = clamp01((90 - (pitch - halfFov)) / 180);
+        Matrix4f card = new Matrix4f(camera).translate(0, 0, -d).scale(2 * d / p.m00() * 1.02f, 2 * d / p.m11() * 1.02f, 1);
+        gpu.drawParticle(quad, skyTexture, card, Color.WHITE, false, 0, vTop, 1, Math.max(0.001f, vBottom - vTop));
+
+        Vector3f toSun = new Vector3f(lightDirection).negate().normalize();
+        if (!sky.sun() || toSun.y < -0.12f) return;
+        Matrix4f facing = new Matrix4f(camera).setTranslation(0, 0, 0);
+        Vector3f at = new Vector3f(view.eye()).add(new Vector3f(toSun).mul(d));
+        float glow = 2 * d * (float) Math.tan(Math.toRadians(9)), core = 2 * d * (float) Math.tan(Math.toRadians(1.6));
+        Color c = sky.sunColor();
+        gpu.drawParticle(quad, softDot, new Matrix4f().translate(at).mul(facing).scale(glow), new Color(c.getRed(), c.getGreen(), c.getBlue(), 70), true);
+        gpu.drawParticle(quad, softDot, new Matrix4f().translate(at).mul(facing).scale(core * 2.2f), new Color(c.getRed(), c.getGreen(), c.getBlue(), 160), true);
+        gpu.drawParticle(quad, softDot, new Matrix4f().translate(at).mul(facing).scale(core), c, true);
+    }
+
+    /** The whole sky from straight up (top row) to straight down (bottom row). */
+    private static java.awt.image.BufferedImage skyPicture(SkyLook sky) {
+        int rows = 256;
+        java.awt.image.BufferedImage picture = new java.awt.image.BufferedImage(1, rows, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < rows; y++) {
+            float elevation = 90 - 180 * (y + 0.5f) / rows;
+            Color c = elevation >= 0
+                    ? mix(sky.horizon(), sky.top(), (float) Math.pow(elevation / 90, 0.55))
+                    : mix(sky.horizon(), sky.ground(), Math.min(1, -elevation / 6));
+            picture.setRGB(0, y, c.getRGB() | 0xFF000000);
+        }
+        return picture;
+    }
+
+    /** Colours in steps of 4, so a slowly moving sun makes a new sky picture only now and then. */
+    private static Color coarse(Color c) {
+        return new Color(c.getRed() & ~3, c.getGreen() & ~3, c.getBlue() & ~3);
+    }
+
+    private static Color mix(Color a, Color b, float t) {
+        t = clamp01(t);
+        return new Color(Math.round(a.getRed() + (b.getRed() - a.getRed()) * t), Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+                Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * t));
+    }
+
+    private static float smoothstep(float from, float to, float x) {
+        float t = clamp01((x - from) / (to - from));
+        return t * t * (3 - 2 * t);
+    }
+
+    private static float clamp01(float x) {
+        return Math.max(0, Math.min(1, x));
+    }
+
+    /** The first active Light in the scene lights everything (null: none, so a soft default light does). */
+    private static Entity sun(Scene scene) {
+        for (Entity entity : scene.entities()) {
+            if (entity.active && entity.has(Light.class)) return entity;
+        }
+        return null;
+    }
+
+    private GraphicsBackend.Frame frame(Entity sun, Vector3f lightDirection, RenderView view, Color background,
+                                        GraphicsBackend.Shadows shadows) {
+        if (sun == null) return new GraphicsBackend.Frame(view, background, lightDirection, new Vector3f(0.9f), 0.3f, settings, shadows);
+        Light light = sun.get(Light.class);
+        Vector3f color = new Vector3f(light.color.getRed(), light.color.getGreen(), light.color.getBlue()).mul((float) light.intensity / 255f);
+        return new GraphicsBackend.Frame(view, background, lightDirection, color, (float) light.ambient, settings, shadows);
+    }
+
+    // ---------------------------------------------------------------- shadows
+
+    /** How far behind the shadow area (toward the light) things still cast into it: tall towers, hills. */
+    private static final float SHADOW_REACH = 100;
+    /** How dark shadows are without a Light in the scene. */
+    private static final float DEFAULT_SHADOW_STRENGTH = 0.6f;
+
+    // the light's view of the shadow area this frame: its rotation, and the area's center and half size in it
+    private final Matrix4f lightView = new Matrix4f();
+    private final Vector3f shadowCenter = new Vector3f();
+    private float shadowRadius;
+
+    /**
+     * Draws the shadow map: how far every caster near the camera is from the light, looking
+     * along the light. Lit surfaces then check it to see whether something is between them
+     * and the light. Returns null when there are no shadows this frame.
+     */
+    private GraphicsBackend.Shadows drawShadowMap(Scene scene, RenderView view, Entity sun, Vector3f lightDirection,
+                                                  Map<Entity, Posed> animated) {
+        int size = settings.shadows.mapSize;
+        Light light = sun == null ? null : sun.get(Light.class);
+        float strength = light == null ? DEFAULT_SHADOW_STRENGTH : (float) light.shadowStrength;
+        boolean lit = settings.shading == RenderSettings.Shading.LIT || settings.shading == RenderSettings.Shading.TOON;
+        if (size == 0 || !lit || strength <= 0 || (light != null && !light.shadows) || lightDirection.lengthSquared() < 1e-8f) return null;
+
+        // a square area around what the camera sees, looked at straight along the light
+        float radius = (float) settings.shadowDistance / 2;
+        Vector3f direction = new Vector3f(lightDirection).normalize();
+        boolean straightDown = Math.abs(direction.y) > 0.99f;
+        lightView.setLookAt(0, 0, 0, direction.x, direction.y, direction.z, 0, straightDown ? 0 : 1, straightDown ? 1 : 0);
+        Vector3f center = lightView.transformPosition(shadowAreaCenter(view, radius));
+        // moved only in whole shadow map pixels, so shadow edges don't shimmer as the camera moves
+        float texel = radius * 2 / size;
+        center.x = (float) Math.floor(center.x / texel) * texel;
+        center.y = (float) Math.floor(center.y / texel) * texel;
+        shadowCenter.set(center);
+        shadowRadius = radius;
+
+        Matrix4f matrix = new Matrix4f()
+                .ortho(center.x - radius, center.x + radius, center.y - radius, center.y + radius,
+                        -center.z - radius - SHADOW_REACH, -center.z + radius)
+                .mul(lightView);
+        gpu.beginShadows(matrix, size);
+        drawMeshes(scene, animated, true);
+        gpu.endShadows();
+        return new GraphicsBackend.Shadows(matrix, Math.min(1, strength), texel);
+    }
+
+    /** Where the shadow area is centered: ahead of the camera, or for flat views, the ground they look down at. */
+    private Vector3f shadowAreaCenter(RenderView view, float radius) {
+        Vector3f forward = view.view().invert(new Matrix4f()).transformDirection(new Vector3f(0, 0, -1)).normalize();
+        if (view.orthographic() && forward.y < -0.05f) return new Vector3f(forward).mul(-eye.y / forward.y).add(eye);
+        return new Vector3f(forward).mul(radius * 0.8f).add(eye);
+    }
+
+    /** True if something at (x, y, z), 'reach' across, can't cast a shadow into this frame's shadow area. */
+    private boolean outsideShadowArea(float x, float y, float z, float reach) {
+        Vector3f p = lightView.transformPosition(new Vector3f(x, y, z));
+        float side = shadowRadius + reach;
+        return Math.abs(p.x - shadowCenter.x) > side || Math.abs(p.y - shadowCenter.y) > side
+                || p.z < shadowCenter.z - side || p.z > shadowCenter.z + SHADOW_REACH + reach;
+    }
+
+    /** A solid surface: lit in the scene, or a shadow caster while drawing the shadow map. */
+    private void surface(GpuMesh mesh, GpuTexture texture, Matrix4f matrix, Color color, boolean shadowPass) {
+        if (shadowPass) gpu.drawShadowCaster(mesh, texture, matrix);
+        else gpu.drawLit(mesh, texture, matrix, color);
     }
 
     private static Vector3f toVector(Vec3 v) {
@@ -158,37 +342,40 @@ public final class SceneRenderer implements AutoCloseable {
         return settings.fog ? (float) settings.fogEnd + 5 : 2000;
     }
 
-    private void drawMeshes(Scene scene) {
-        Map<Entity, Posed> animated = poseCharacters(scene);
+    /** Every solid thing: in the scene, or (shadowPass) into the shadow map, skipping what can't cast into it. */
+    private void drawMeshes(Scene scene, Map<Entity, Posed> animated, boolean shadowPass) {
         float far = drawDistance();
         for (Entity entity : scene.entities()) {
             Terrain terrain = entity.get(Terrain.class);
-            if (entity.active && terrain != null) drawTerrain(entity, terrain, far);
+            if (entity.active && terrain != null) drawTerrain(entity, terrain, far, shadowPass);
             ParticleEmitter emitter = entity.get(ParticleEmitter.class);
-            if (entity.active && emitter != null && emitter.look == ParticleEmitter.Look.MODEL) drawModelParticles(emitter); // solid, so drawn with the meshes
+            if (!shadowPass && entity.active && emitter != null && emitter.look == ParticleEmitter.Look.MODEL) drawModelParticles(emitter); // solid, so drawn with the meshes
             MeshRenderer renderer = entity.get(MeshRenderer.class);
-            if (!entity.active || renderer == null) continue;
+            if (!entity.active || renderer == null || (shadowPass && !renderer.castShadows)) continue;
+            Model shape = model(renderer.mesh);
+            Vec3 p = entity.transform.position;
+            float reach = reach(entity, shape);
+            if (shadowPass ? outsideShadowArea((float) p.x, (float) p.y, (float) p.z, reach)
+                    : settings.fog && eye.distance((float) p.x, (float) p.y, (float) p.z) - reach > far) continue; // hidden by the fog anyway
             entity.transform.matrix(model).rotateY((float) Math.toRadians(renderer.turn));
             // the renderer's texture (if set) replaces the model's own; its color tints every part
             GpuTexture override = assets.texture(renderer.texture, false);
-            Model shape = model(renderer.mesh);
-            if (settings.fog && beyond(entity, shape, far)) continue; // hidden by the fog anyway
             Posed character = animated.get(entity);
             List<GpuMesh> posed = character != null && character.model == shape ? character.meshes : null;
             for (int i = 0; i < shape.parts.size(); i++) {
                 Model.Part part = shape.parts.get(i);
                 GpuMesh mesh = posed != null && posed.get(i) != null ? posed.get(i) : part.mesh();
-                gpu.drawLit(mesh, override != null ? override : part.texture(), model, multiply(renderer.color, part.color()));
+                surface(mesh, override != null ? override : part.texture(), model, multiply(renderer.color, part.color()), shadowPass);
             }
         }
     }
 
-    /** True if all of an entity's model is further than 'far' from the eye. */
-    private boolean beyond(Entity entity, Model shape, float far) {
-        Vec3 p = entity.transform.position, s = entity.transform.scale;
-        float reach = new Vector3f(shape.boundsMax).sub(shape.boundsMin).length() / 2
-                * (float) Math.max(Math.abs(s.x), Math.max(Math.abs(s.y), Math.abs(s.z)));
-        return eye.distance((float) p.x, (float) p.y, (float) p.z) - reach > far;
+    /** How far an entity's model can stick out from its position. */
+    private static float reach(Entity entity, Model shape) {
+        Vec3 s = entity.transform.scale;
+        Vector3f from = new Vector3f(shape.boundsMin), to = new Vector3f(shape.boundsMax);
+        float corner = Math.max(from.length(), to.length()); // models needn't be centered on their position
+        return corner * (float) Math.max(Math.abs(s.x), Math.max(Math.abs(s.y), Math.abs(s.z)));
     }
 
     // ---------------------------------------------------------------- terrain
@@ -205,7 +392,7 @@ public final class SceneRenderer implements AutoCloseable {
     private static final Color TRUNK = new Color(0x6B4F3A);
     private static final Color LEAVES = new Color(0x3F7A3C);
 
-    private void drawTerrain(Entity entity, Terrain terrain, float far) {
+    private void drawTerrain(Entity entity, Terrain terrain, float far, boolean shadowPass) {
         String key = terrain.shapeKey() + "|" + terrain.sand + terrain.grass + terrain.rock + terrain.snow;
         TerrainLook look = terrainLooks.get(entity);
         if (look == null || !look.key().equals(key)) {
@@ -215,17 +402,17 @@ public final class SceneRenderer implements AutoCloseable {
         }
         Vec3 p = entity.transform.position;
         model.identity().translate((float) p.x, (float) p.y, (float) p.z);
-        gpu.drawLit(look.mesh(), look.texture(), model, Color.WHITE);
+        surface(look.mesh(), shadowPass ? null : look.texture(), model, Color.WHITE, shadowPass); // (the colour map has no see-through parts)
 
-        // trees: a trunk and a round top, skipped when out of sight in the distance
+        // trees: a trunk and a round top, skipped when out of sight in the distance (or of the shadows)
         GpuMesh trunk = builtIn.get("cylinder"), top = builtIn.get("sphere");
         for (double[] tree : terrain.trees()) {
             float x = (float) (p.x + tree[0]), y = (float) (p.y + tree[2]), z = (float) (p.z + tree[1]), s = (float) tree[3];
-            if (eye.distance(x, y, z) > far) continue;
+            if (shadowPass ? outsideShadowArea(x, y + 2 * s, z, 3 * s) : eye.distance(x, y, z) > far) continue;
             model.identity().translate(x, y + 1.1f * s, z).scale(0.35f * s, 2.2f * s, 0.35f * s);
-            gpu.drawLit(trunk, null, model, TRUNK);
+            surface(trunk, null, model, TRUNK, shadowPass);
             model.identity().translate(x, y + 3.0f * s, z).scale(2.4f * s, 2.8f * s, 2.4f * s);
-            gpu.drawLit(top, null, model, LEAVES);
+            surface(top, null, model, LEAVES, shadowPass);
         }
     }
 
@@ -257,22 +444,42 @@ public final class SceneRenderer implements AutoCloseable {
         return b.build(false, new Vector3f(-size / 2, low, -size / 2), new Vector3f(size / 2, high, size / 2));
     }
 
-    /** The land's colours (sand, grass, rock, snow by height and steepness), with a little grain. */
+    /**
+     * The land's colours (sand, grass, rock, snow by height and steepness), with a little grain.
+     * Read straight from the height grid: this is redone every frame while the land is sculpted.
+     */
     private static BufferedImage terrainColours(Terrain terrain) {
         int pixels = 256;
+        float[] h = terrain.heights();
+        int n = Math.max(2, terrain.resolution);
+        double cell = terrain.size / n, top = Math.max(0.001, terrain.height);
         BufferedImage image = new BufferedImage(pixels, pixels, BufferedImage.TYPE_INT_RGB);
         java.util.Random grain = new java.util.Random(terrain.seed);
         for (int py = 0; py < pixels; py++) {
             for (int px = 0; px < pixels; px++) {
-                double x = ((px + 0.5) / pixels - 0.5) * terrain.size, z = ((py + 0.5) / pixels - 0.5) * terrain.size;
-                double hh = terrain.heightAt(x, z);
-                Color colour = terrain.colorAt(Double.isNaN(hh) ? 0 : hh / Math.max(0.001, terrain.height), terrain.steepness(x, z));
+                double gx = (px + 0.5) / pixels * n, gz = (py + 0.5) / pixels * n;
+                double hh = gridHeight(h, n, gx, gz);
+                double dx = gridHeight(h, n, gx + 1, gz) - gridHeight(h, n, gx - 1, gz);
+                double dz = gridHeight(h, n, gx, gz + 1) - gridHeight(h, n, gx, gz - 1);
+                double steepness = Math.min(1, Math.hypot(dx, dz) / (2 * cell));
+                Color colour = terrain.colorAt(hh / top, steepness);
                 double shade = 0.94 + grain.nextDouble() * 0.12;
                 int r = (int) Math.min(255, colour.getRed() * shade), g = (int) Math.min(255, colour.getGreen() * shade), bl = (int) Math.min(255, colour.getBlue() * shade);
                 image.setRGB(px, py, r << 16 | g << 8 | bl);
             }
         }
         return image;
+    }
+
+    /** The height at grid position (gx, gz) (0..n across), blended between corners; clamped at the edges. */
+    private static double gridHeight(float[] h, int n, double gx, double gz) {
+        gx = Math.max(0, Math.min(n, gx));
+        gz = Math.max(0, Math.min(n, gz));
+        int ix = Math.min(n - 1, (int) gx), iz = Math.min(n - 1, (int) gz);
+        double fx = gx - ix, fz = gz - iz;
+        double near = h[iz * (n + 1) + ix] * (1 - fx) + h[iz * (n + 1) + ix + 1] * fx;
+        double far = h[(iz + 1) * (n + 1) + ix] * (1 - fx) + h[(iz + 1) * (n + 1) + ix + 1] * fx;
+        return near * (1 - fz) + far * fz;
     }
 
     // ---------------------------------------------------------------- animated models
@@ -792,6 +999,7 @@ public final class SceneRenderer implements AutoCloseable {
     @Override
     public void close() {
         builtIn.values().forEach(GpuMesh::close);
+        skyTextures.values().forEach(GpuTexture::close);
         quad.close();
         grid.close();
         wireCube.close();

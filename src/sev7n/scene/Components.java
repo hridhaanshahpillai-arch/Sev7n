@@ -13,18 +13,21 @@ public final class Components {
     static {
         register("MeshRenderer", MeshRenderer::new);
         register("Animator", Animator::new);
+        register("AnimationPlayer", AnimationPlayer::new);
         register("Ragdoll", Ragdoll::new);
         register("SpriteRenderer", SpriteRenderer::new);
         register("SpriteAnimator", SpriteAnimator::new);
         register("Tilemap", Tilemap::new);
         register("Terrain", Terrain::new);
         register("Camera", Camera::new);
+        register("ThirdPersonCamera", ThirdPersonCamera::new);
         register("Light", Light::new);
         register("BoxCollider", BoxCollider::new);
         register("SphereCollider", SphereCollider::new);
         register("CapsuleCollider", CapsuleCollider::new);
         register("Rigidbody", Rigidbody::new);
         register("ParticleEmitter", ParticleEmitter::new);
+        register("AudioSource", AudioSource::new);
         register("Npc", Npc::new);
         register("Behaviour", Behaviour::new);
     }

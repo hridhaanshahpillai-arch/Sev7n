@@ -76,16 +76,16 @@ public class Lexer {
             case '[' -> add(TokenType.LEFT_BRACKET);
             case ']' -> add(TokenType.RIGHT_BRACKET);
             case ',' -> add(TokenType.COMMA);
-            case ':' -> add(TokenType.COLON);
+            case ':' -> add(match(':') ? TokenType.COLON_COLON : TokenType.COLON);
             case ';' -> add(TokenType.SEMICOLON);
             case '?' -> add(match('?') ? TokenType.QUESTION_QUESTION : TokenType.QUESTION);
             case '%' -> add(match('=') ? TokenType.PERCENT_EQUAL : TokenType.PERCENT);
             case '.' -> add(match('.') ? TokenType.DOT_DOT : TokenType.DOT);
-            case '+' -> add(match('=') ? TokenType.PLUS_EQUAL : TokenType.PLUS);
-            case '-' -> add(match('=') ? TokenType.MINUS_EQUAL : TokenType.MINUS);
+            case '+' -> add(match('+') ? TokenType.PLUS_PLUS : match('=') ? TokenType.PLUS_EQUAL : TokenType.PLUS);
+            case '-' -> add(match('-') ? TokenType.MINUS_MINUS : match('=') ? TokenType.MINUS_EQUAL : TokenType.MINUS);
             case '*' -> add(match('=') ? TokenType.STAR_EQUAL : TokenType.STAR);
             case '=' -> add(match('=') ? TokenType.EQUAL_EQUAL : TokenType.EQUAL);
-            case '<' -> add(match('=') ? TokenType.LESS_EQUAL : TokenType.LESS);
+            case '<' -> add(match('<') ? TokenType.LESS_LESS : match('=') ? TokenType.LESS_EQUAL : TokenType.LESS);
             case '>' -> add(match('=') ? TokenType.GREATER_EQUAL : TokenType.GREATER);
             case '!' -> add(match('=') ? TokenType.BANG_EQUAL : TokenType.BANG);
             case '&' -> {
@@ -168,11 +168,22 @@ public class Lexer {
         return value.toString();
     }
 
-    /** CSS-style colors: #RGB, #RGBA, #RRGGBB or #RRGGBBAA. */
+    /** CSS-style colors: #RGB, #RGBA, #RRGGBB or #RRGGBBAA. A C/C++ line like #include &lt;cmath&gt; is skipped. */
     private void color() {
+        int word = current;
+        while (isAlphaNumeric(peek(word - current))) word++;
+        String run = source.substring(current, word);
+        if (!run.isEmpty() && isAlpha(run.charAt(0)) && !run.matches("[0-9a-fA-F]+")) {
+            while (peek() != '\n' && !isAtEnd()) advance();
+            return;
+        }
         while (isHexDigit(peek())) advance();
         String hex = source.substring(start + 1, current);
         add(TokenType.COLOR, parseHexColor(hex));
+    }
+
+    private char peek(int ahead) {
+        return current + ahead >= source.length() ? '\0' : source.charAt(current + ahead);
     }
 
     private Color parseHexColor(String hex) {
@@ -201,6 +212,8 @@ public class Lexer {
         double value = Double.parseDouble(source.substring(start, current));
         // CSS habit: allow "20px". The unit is purely decorative.
         if (peek() == 'p' && peekNext() == 'x') current += 2;
+        // C# and C++ habit: 1.5f (a float) means the same as 1.5
+        else if (peek() == 'f' && !isAlphaNumeric(peekNext())) current++;
         add(TokenType.NUMBER, value);
     }
 

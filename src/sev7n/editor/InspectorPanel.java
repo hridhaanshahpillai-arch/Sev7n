@@ -152,8 +152,11 @@ final class InspectorPanel {
             case Animator a -> drawAnimator(entity, a);
             case CapsuleCollider c -> drawCapsuleCollider(entity, c);
             case ParticleEmitter p -> drawParticleEmitter(p);
+            case sev7n.scene.AudioSource a -> drawAudioSource(a);
+            case sev7n.scene.ThirdPersonCamera c -> drawThirdPersonCamera(c);
+            case sev7n.scene.AnimationPlayer a -> drawAnimationPlayer(a);
             case Npc n -> drawNpc(entity, n);
-            case Terrain t -> drawTerrain(t);
+            case Terrain t -> drawTerrain(entity, t);
             case Ragdoll r -> drawRagdoll(entity, r);
             case Behaviour b -> drawBehaviour(b);
             default -> false;
@@ -173,7 +176,11 @@ final class InspectorPanel {
             turn = Widgets.number("Model turn", m.turn, 1f, -360, 360);
             if (ImGui.isItemHovered()) ImGui.setTooltip("Turns the model inside the object (degrees). 180 for characters that face backwards when they walk");
         }
-        boolean changed = !mesh.equals(m.mesh) || !color.equals(m.color) || !texture.equals(m.texture) || turn != m.turn;
+        boolean castShadows = Widgets.checkbox("Cast shadows", m.castShadows,
+                "Blocks the Directional Light, leaving a shadow. Turn off for glass, or to save time on far-away scenery");
+        boolean changed = !mesh.equals(m.mesh) || !color.equals(m.color) || !texture.equals(m.texture) || turn != m.turn
+                || castShadows != m.castShadows;
+        m.castShadows = castShadows;
         m.turn = turn;
         m.mesh = mesh;
         m.color = color;
@@ -449,7 +456,8 @@ final class InspectorPanel {
 
     // ---------------------------------------------------------------- terrain
 
-    private boolean drawTerrain(Terrain t) {
+    private boolean drawTerrain(Entity entity, Terrain t) {
+        boolean sculpted = drawSculpting(entity, t);
         String before = t.shapeKey() + t.sand + t.grass + t.rock + t.snow;
         t.size = Widgets.number("Size", t.size, 1f, 10, 5000);
         if (ImGui.isItemHovered()) ImGui.setTooltip("How wide and deep the land is");
@@ -470,7 +478,51 @@ final class InspectorPanel {
         t.rock = Widgets.color("Rock", t.rock);
         t.snow = Widgets.color("Snow", t.snow);
         Widgets.hint("Characters walk on it, ragdolls land on it, raycasts hit it and NPCs find their way over it. Turn on fog in Settings to set how far you can see.");
-        return !before.equals(t.shapeKey() + t.sand + t.grass + t.rock + t.snow);
+        return sculpted || !before.equals(t.shapeKey() + t.sand + t.grass + t.rock + t.snow);
+    }
+
+    /** The sculpting brushes: pick one, then drag over the land in the Scene view. Returns true if the land changed here. */
+    private boolean drawSculpting(Entity entity, Terrain t) {
+        boolean sculpting = ctx.sculptingTerrain() == entity;
+        if (sculpting ? ImGui.button("Stop sculpting", -1, 0) : Widgets.primaryButton("Sculpt")) {
+            ctx.sculpt(sculpting ? null : entity);
+            sculpting = !sculpting;
+        }
+        if (ImGui.isItemHovered() && !sculpting) ImGui.setTooltip("Shape the land by hand with brushes in the Scene view");
+        if (!sculpting) {
+            if (t.sculpted()) Widgets.hint("Sculpted by hand (kept when you change the settings below).");
+            ImGui.spacing();
+            return false;
+        }
+        for (Terrain.Brush brush : Terrain.Brush.values()) {
+            boolean active = ctx.brush == brush;
+            if (active) Widgets.pushAccent();
+            if (ImGui.button(brush.label)) ctx.brush = brush;
+            if (active) Widgets.popAccent();
+            if (ImGui.isItemHovered()) ImGui.setTooltip(brush.description);
+            ImGui.sameLine();
+        }
+        ImGui.newLine();
+        ctx.brushSize = Widgets.number("Brush size", ctx.brushSize, 0.1f, 0.5f, 500);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("How wide the brush is, in units ([ and ] in the Scene view)");
+        ctx.brushStrength = Widgets.number("Strength", ctx.brushStrength, 0.01f, 0.01f, 1);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("How fast the brush changes the land");
+        Widgets.hint("Drag over the land in the Scene view. Shift lowers, Ctrl smooths, whichever brush is picked. Ctrl+Z undoes a stroke.");
+        boolean changed = false;
+        if (t.sculpted()) {
+            if (ImGui.button("Clear sculpting")) ImGui.openPopup("clear-sculpt");
+            if (ImGui.beginPopup("clear-sculpt")) {
+                ImGui.text("Take away all the hand sculpting?");
+                if (ImGui.button("Clear")) {
+                    t.clearSculpt();
+                    changed = true;
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.endPopup();
+            }
+        }
+        ImGui.separator();
+        return changed;
     }
 
     // ---------------------------------------------------------------- ragdoll
@@ -939,9 +991,42 @@ final class InspectorPanel {
         }
         double near = Widgets.number("Near", c.near, 0.01f, 0.01f, 10);
         double far = Widgets.number("Far", c.far, 1f, 1, 10000);
-        Color background = Widgets.color("Background", c.background);
+        boolean sky = c.sky;
+        Color skyTop = c.skyTop, skyHorizon = c.skyHorizon, skyGround = c.skyGround;
+        boolean sun = c.sun, dayNight = c.dayNight;
+        Color background = c.background;
+        if (!orthographic) sky = Widgets.checkbox("Sky", c.sky, "A sky behind everything: a gradient down to the horizon, the ground below, and the sun");
+        if (!orthographic && sky) {
+            // one click for a whole look; the colours below can still be tweaked
+            ImGui.setCursorPosX(Widgets.labelWidth());
+            String[][] presets = {{"Day", "3F7FD8", "BFD9F2", "5F6B58"}, {"Sunset", "39417A", "F2A06B", "3A3340"},
+                    {"Night", "060A1C", "1C2445", "0C0E14"}, {"Overcast", "8A949E", "C6CCD1", "6B6F68"}, {"Alien", "3B1A5E", "D96FB0", "2A1B3A"}};
+            for (int i = 0; i < presets.length; i++) {
+                if (i > 0) ImGui.sameLine();
+                if (ImGui.smallButton(presets[i][0])) {
+                    skyTop = new Color(Integer.parseInt(presets[i][1], 16));
+                    skyHorizon = new Color(Integer.parseInt(presets[i][2], 16));
+                    skyGround = new Color(Integer.parseInt(presets[i][3], 16));
+                }
+            }
+            skyTop = Widgets.color("Sky top", skyTop);
+            skyHorizon = Widgets.color("Horizon", skyHorizon);
+            if (ImGui.isItemHovered()) ImGui.setTooltip("Also the fog's colour, so faraway things melt into the sky");
+            skyGround = Widgets.color("Ground", skyGround);
+            sun = Widgets.checkbox("Sun", c.sun, "A glowing sun where the scene's Light shines from (turn the Light to move it)");
+            dayNight = Widgets.checkbox("Day and night", c.dayNight, "Darker at night, orange at sunrise and sunset, following the Light's angle");
+        } else {
+            background = Widgets.color("Background", c.background);
+        }
         boolean changed = orthographic != c.orthographic || size != c.size || fov != c.fieldOfView
-                || near != c.near || far != c.far || !background.equals(c.background);
+                || near != c.near || far != c.far || !background.equals(c.background) || sky != c.sky || !skyTop.equals(c.skyTop)
+                || !skyHorizon.equals(c.skyHorizon) || !skyGround.equals(c.skyGround) || sun != c.sun || dayNight != c.dayNight;
+        c.sky = sky;
+        c.skyTop = skyTop;
+        c.skyHorizon = skyHorizon;
+        c.skyGround = skyGround;
+        c.sun = sun;
+        c.dayNight = dayNight;
 
         // a 2D camera should look straight at the X/Y plane (down -Z), from in front of it
         boolean facingPlane = entity.transform.rotation.x == 0 && entity.transform.rotation.y == 0 && entity.transform.position.z > 0;
@@ -963,14 +1048,117 @@ final class InspectorPanel {
         return changed;
     }
 
+    // ---------------------------------------------------------------- animation player
+
+    private boolean drawAnimationPlayer(sev7n.scene.AnimationPlayer a) {
+        String clip = acceptDrop(Widgets.choice("Animation", a.clip, ctx.project.assets(AssetKind.ANIMATION)), AssetKind.ANIMATION);
+        boolean playOnStart = Widgets.checkbox("Play on start", a.playOnStart, "Starts by itself when the game starts (scripts: entity.playClip())");
+        double speed = Widgets.number("Speed", a.speed, 0.01f, -10, 10);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("1 = normal, 2 = twice as fast, -1 = backwards");
+        ImGui.setCursorPosX(Widgets.labelWidth());
+        if (ImGui.button("Open Animation window", -1, 0) && ctx.animation != null) ctx.animation.open();
+        boolean changed = !clip.equals(a.clip) || playOnStart != a.playOnStart || speed != a.speed;
+        a.clip = clip;
+        a.playOnStart = playOnStart;
+        a.speed = speed;
+        return changed;
+    }
+
+    // ---------------------------------------------------------------- third person camera
+
+    private boolean drawThirdPersonCamera(sev7n.scene.ThirdPersonCamera c) {
+        String target = Widgets.text("Follow", c.target, "The name of the object to follow, e.g. Player");
+        double distance = Widgets.number("Distance", c.distance, 0.05f, 0.5f, 100);
+        double height = Widgets.number("Look height", c.height, 0.05f, -10, 10);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("The camera looks at a point this high above the target's feet");
+        double sensitivity = Widgets.number("Mouse speed", c.sensitivity, 0.005f, 0, 2);
+        double smoothing = Widgets.number("Smoothing", c.smoothing, 0.1f, 0, 50);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("How quickly the camera catches up: higher = snappier, 0 = instantly");
+        double minPitch = Widgets.number("Lowest angle", c.minPitch, 0.5f, -89, 89);
+        double maxPitch = Widgets.number("Highest angle", c.maxPitch, 0.5f, -89, 89);
+        boolean lockMouse = Widgets.checkbox("Capture mouse", c.lockMouse, "Hides the cursor while playing so moving the mouse orbits the camera");
+        boolean avoidWalls = Widgets.checkbox("Avoid walls", c.avoidWalls, "Moves in closer instead of going through walls");
+        if (ctx.scene().find(target) == null) Widgets.hint("There's no object called \"" + target + "\" in this scene.");
+        Widgets.hint("Scripts: move with cameraForward() and cameraRight() so \"forward\" is where the camera looks.");
+        boolean changed = !target.equals(c.target) || distance != c.distance || height != c.height || sensitivity != c.sensitivity
+                || smoothing != c.smoothing || minPitch != c.minPitch || maxPitch != c.maxPitch || lockMouse != c.lockMouse || avoidWalls != c.avoidWalls;
+        c.target = target;
+        c.distance = distance;
+        c.height = height;
+        c.sensitivity = sensitivity;
+        c.smoothing = smoothing;
+        c.minPitch = minPitch;
+        c.maxPitch = Math.max(minPitch, maxPitch);
+        c.lockMouse = lockMouse;
+        c.avoidWalls = avoidWalls;
+        return changed;
+    }
+
+    // ---------------------------------------------------------------- audio source
+
+    private sev7n.audio.AudioMixer.Voice previewing;
+
+    private boolean drawAudioSource(sev7n.scene.AudioSource a) {
+        String clip = acceptDrop(Widgets.choice("Sound", a.clip, ctx.project.assets(AssetKind.SOUND)), AssetKind.SOUND);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("A .wav or .ogg file (drag one here from the Project panel)");
+        double volume = Widgets.number("Volume", a.volume, 0.01f, 0, 4);
+        double pitch = Widgets.number("Pitch", a.pitch, 0.01f, 0.05f, 8);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("1 = normal, 2 = an octave higher and faster, 0.5 = lower and slower");
+        boolean loop = Widgets.checkbox("Loop", a.loop, "Plays over and over (fires, engines, music)");
+        boolean playOnStart = Widgets.checkbox("Play on start", a.playOnStart, "Starts by itself when the game starts (scripts: entity.playAudio())");
+        boolean spatial = Widgets.checkbox("3D", a.spatial, "Heard from where the object is: louder near the camera, from the left or right. Off: the same everywhere");
+        double range = a.range;
+        if (spatial) {
+            range = Widgets.number("Range", a.range, 0.1f, 0.5f, 1000);
+            if (ImGui.isItemHovered()) ImGui.setTooltip("How far away it can be heard");
+        }
+        String bus = Widgets.choice("Group", a.bus, sev7n.audio.AudioMixer.BUSES);
+        if (ImGui.isItemHovered()) ImGui.setTooltip("Which Audio Mixer group it plays through (Window > Audio Mixer)");
+
+        boolean previewPlaying = previewing != null && previewing.playing();
+        ImGui.setCursorPosX(Widgets.labelWidth());
+        if (previewPlaying ? ImGui.button("Stop", -1, 0) : ImGui.button("Preview", -1, 0)) {
+            if (previewPlaying) previewing.stop();
+            else if (!clip.isBlank()) previewing = ctx.previewSound(clip, volume, pitch, loop);
+        }
+        if (previewPlaying) {
+            previewing.setVolume(volume); // hear changes while it plays
+            previewing.setPitch(pitch);
+            previewing.setLoop(loop);
+        }
+        if (clip.isBlank()) Widgets.hint("Pick a sound (.wav or .ogg). Make one in Window > Sound Maker.");
+
+        boolean changed = !clip.equals(a.clip) || volume != a.volume || pitch != a.pitch || loop != a.loop
+                || playOnStart != a.playOnStart || spatial != a.spatial || range != a.range || !bus.equals(a.bus);
+        a.clip = clip;
+        a.volume = volume;
+        a.pitch = pitch;
+        a.loop = loop;
+        a.playOnStart = playOnStart;
+        a.spatial = spatial;
+        a.range = range;
+        a.bus = bus;
+        return changed;
+    }
+
     private boolean drawLight(Light l) {
         Color color = Widgets.color("Color", l.color);
         double intensity = Widgets.number("Intensity", l.intensity, 0.01f, 0, 10);
         double ambient = Widgets.number("Ambient", l.ambient, 0.01f, 0, 1);
-        boolean changed = !color.equals(l.color) || intensity != l.intensity || ambient != l.ambient;
+        boolean shadows = Widgets.checkbox("Shadows", l.shadows,
+                "Things block this light and leave shadows. How sharp they are: Settings > Graphics > Shadows");
+        double strength = l.shadowStrength;
+        if (shadows) {
+            strength = Widgets.number("Strength", l.shadowStrength, 0.01f, 0, 1);
+            if (ImGui.isItemHovered()) ImGui.setTooltip("How dark shadows are: 0 = invisible, 1 = only the ambient light gets in");
+        }
+        boolean changed = !color.equals(l.color) || intensity != l.intensity || ambient != l.ambient
+                || shadows != l.shadows || strength != l.shadowStrength;
         l.color = color;
         l.intensity = intensity;
         l.ambient = ambient;
+        l.shadows = shadows;
+        l.shadowStrength = strength;
         return changed;
     }
 

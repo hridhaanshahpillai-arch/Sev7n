@@ -1,5 +1,6 @@
 # Downloads Sev7n's libraries from Maven Central into lib\ and verifies their SHA-1 checksums.
-#   LWJGL    - OpenGL, Vulkan, windowing and input (+ shaderc, which compiles shaders for Vulkan)
+#   LWJGL    - OpenGL, Vulkan, windowing and input (+ shaderc, which compiles shaders for Vulkan,
+#              and stb, which reads .ogg sound files)
 #   JOML     - 3D math (vectors, matrices)
 #   imgui    - Dear ImGui, the editor's UI toolkit
 #
@@ -22,6 +23,7 @@ $artifacts = @(
     "org/lwjgl/lwjgl-vulkan/$lwjgl/lwjgl-vulkan-$lwjgl.jar"
     "org/lwjgl/lwjgl-shaderc/$lwjgl/lwjgl-shaderc-$lwjgl.jar"
     "org/lwjgl/lwjgl-tinyfd/$lwjgl/lwjgl-tinyfd-$lwjgl.jar"
+    "org/lwjgl/lwjgl-stb/$lwjgl/lwjgl-stb-$lwjgl.jar"
     "org/joml/joml/$joml/joml-$joml.jar"
     "io/github/spair/imgui-java-binding/$imgui/imgui-java-binding-$imgui.jar"
     "io/github/spair/imgui-java-lwjgl3/$imgui/imgui-java-lwjgl3-$imgui.jar"
@@ -29,7 +31,7 @@ $artifacts = @(
     "io/github/spair/imgui-java-natives-macos/$imgui/imgui-java-natives-macos-$imgui.jar"
     "io/github/spair/imgui-java-natives-linux/$imgui/imgui-java-natives-linux-$imgui.jar"
 )
-foreach ($module in @('lwjgl', 'lwjgl-glfw', 'lwjgl-opengl', 'lwjgl-shaderc', 'lwjgl-tinyfd')) {
+foreach ($module in @('lwjgl', 'lwjgl-glfw', 'lwjgl-opengl', 'lwjgl-shaderc', 'lwjgl-tinyfd', 'lwjgl-stb')) {
     foreach ($platform in $platforms) { $artifacts += "org/lwjgl/$module/$lwjgl/$module-$lwjgl-natives-$platform.jar" }
 }
 # Vulkan on a Mac runs through MoltenVK, which comes with LWJGL (other systems have Vulkan in their drivers)

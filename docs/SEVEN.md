@@ -1,4 +1,4 @@
-# The Seven Language (v0.7.5 alpha)
+# The Seven Language (v0.7.6 alpha)
 
 Seven is the scripting language of the Sev7n engine. It mixes:
 

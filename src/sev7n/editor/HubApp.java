@@ -519,7 +519,10 @@ public final class HubApp {
             new Lesson("NPC.md", "Characters", "Characters that see, hear, chase, remember and keep routines.", "eye"),
             new Lesson("RAGDOLLS.md", "Characters", "Bodies that go limp, tumble down stairs and get back up.", "figure"),
             new Lesson("EFFECTS.md", "Characters", "Fire, smoke, sparks, blood, magic and more.", "spark"),
-            new Lesson("HUD.md", "Your game", "On-screen text, health bars, menus, holograms and sound.", "screen"),
+            new Lesson("HUD.md", "Your game", "On-screen text, health bars, menus and holograms.", "screen"),
+            new Lesson("AUDIO.md", "Your game", "3D sound, music, the Audio Mixer and the Sound Maker.", "note"),
+            new Lesson("CONTROLS.md", "Characters", "Third person camera, gamepads and the sky.", "gear"),
+            new Lesson("MULTIPLAYER.md", "Your game", "Host and join: test it alone with two windows.", "rocket"),
             new Lesson("SETTINGS.md", "Your game", "Graphics, Vulkan, frame rate and Live Mode.", "gear"),
             new Lesson("EXPORT.md", "Your game", "Turn your project into a game anyone can play.", "rocket"));
 
@@ -747,6 +750,13 @@ public final class HubApp {
                 d.addRectFilled(x - s * 0.7f, y - s * 0.4f, x, y - s * 0.2f, c, 1);
                 d.addRectFilled(x - s * 0.7f, y, x + s * 0.5f, y + s * 0.15f, c, 1);
                 d.addLine(x - s * 0.4f, y + s * 0.95f, x + s * 0.4f, y + s * 0.95f, c, t);
+            }
+            case "note" -> { // a pair of music notes
+                d.addCircleFilled(x - s * 0.55f, y + s * 0.6f, s * 0.28f, c);
+                d.addCircleFilled(x + s * 0.55f, y + s * 0.4f, s * 0.28f, c);
+                d.addLine(x - s * 0.3f, y + s * 0.6f, x - s * 0.3f, y - s * 0.75f, c, t);
+                d.addLine(x + s * 0.8f, y + s * 0.4f, x + s * 0.8f, y - s * 0.95f, c, t);
+                d.addLine(x - s * 0.3f, y - s * 0.75f, x + s * 0.8f, y - s * 0.95f, c, t * 2);
             }
             case "gear" -> {
                 d.addCircle(x, y, s * 0.55f, c, 20, t);

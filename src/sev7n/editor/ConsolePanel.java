@@ -21,8 +21,13 @@ final class ConsolePanel {
         this.ctx = ctx;
     }
 
+    /** Where the Console is docked (0 if floating): new bottom panels open there too. */
+    static int dockId;
+
     void draw() {
-        if (!ImGui.begin(TITLE)) {
+        boolean visible = ImGui.begin(TITLE);
+        dockId = ImGui.getWindowDockID();
+        if (!visible) {
             ImGui.end();
             return;
         }

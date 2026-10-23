@@ -72,6 +72,7 @@ final class EditorContext {
     ScriptEditorPanel scripts; // set once the panels exist
     EightsPanel eights;
     SpriteEditorPanel spriteEditor;
+    AnimationPanel animation;
 
     private Scene editScene;
     private Game game; // non-null while playing
@@ -97,6 +98,11 @@ final class EditorContext {
     private long paintingId = -1;    // the tilemap being painted, or -1
     private int paintTile = 0;       // the tile to paint, or Tilemap.EMPTY to erase
     private long previewingId = -1;  // the entity whose animation plays in the editor, or -1
+    private long sculptingId = -1;   // the terrain being sculpted, or -1
+    /** The sculpting brush: which one, how wide (units) and how strong (0..1). */
+    Terrain.Brush brush = Terrain.Brush.RAISE;
+    double brushSize = 8;
+    double brushStrength = 0.5;
 
     /** How the editor runs on this PC. */
     final EditorSettings editorSettings = EditorSettings.load();
@@ -108,6 +114,7 @@ final class EditorContext {
         this.editScene = scene;
         this.renderer = renderer;
         this.graphics = RenderSettings.load(project.root().resolve(RenderSettings.FILE_NAME));
+        this.audio = sev7n.audio.MixerSettings.load(project.root().resolve(sev7n.audio.MixerSettings.FILE_NAME));
         renderer.setSettings(graphics);
         renderer.assets().setRoot(project.root());
         renderer.assets().onProblem(log::warning);
@@ -127,7 +134,7 @@ final class EditorContext {
      */
     void recordUndo(boolean editing, double dt) {
         sinceRecorded += dt;
-        if (playing() || editing) return;
+        if (playing() || editing || (animation != null && animation.previewing())) return; // a previewed pose isn't an edit
         // a check after every edit, and now and then anyway (in case something changed the scene without saying so)
         if (editVersion == recordedVersion && sinceRecorded < 1) return;
         recordedVersion = editVersion;
@@ -282,6 +289,48 @@ final class EditorContext {
         }
     }
 
+    // ---------------------------------------------------------------- audio
+
+    /** The Audio Mixer's volumes (saved with the project, so exported games sound the same). */
+    final sev7n.audio.MixerSettings audio;
+    private sev7n.audio.AudioMixer previewAudio;
+
+    /** The editor's own audio engine, for hearing sounds without playing the game (started on first use). */
+    sev7n.audio.AudioMixer previewAudio() {
+        if (previewAudio == null) {
+            previewAudio = new sev7n.audio.AudioMixer().start();
+            audio.applyTo(previewAudio);
+        }
+        return previewAudio;
+    }
+
+    /** The playing game's audio engine (null when not playing): what the Audio Mixer's meters show. */
+    sev7n.audio.AudioMixer gameAudio() {
+        return game == null ? null : game.audioMixer();
+    }
+
+    /** The mixer's volumes changed: heard straight away (in the game too) and saved. */
+    void saveAudio() {
+        if (previewAudio != null) audio.applyTo(previewAudio);
+        if (game != null) audio.applyTo(game.audioMixer());
+        try {
+            audio.save(project.root().resolve(sev7n.audio.MixerSettings.FILE_NAME));
+        } catch (IOException e) {
+            log.error("Couldn't save the audio settings: " + e.getMessage());
+        }
+    }
+
+    /** Plays a sound file from the project in the editor (Inspector and Project previews). Says why in the console if it can't. */
+    sev7n.audio.AudioMixer.Voice previewSound(String path, double volume, double pitch, boolean loop) {
+        try {
+            sev7n.audio.AudioClip clip = sev7n.audio.AudioClip.read(project.root().resolve(path));
+            return previewAudio().play(clip, "Effects", volume, pitch, loop);
+        } catch (IllegalArgumentException e) {
+            log.warning(e.getMessage());
+            return null;
+        }
+    }
+
     /** Runs something on the main (UI) thread at the start of the next frame. Safe from any thread. */
     void post(Runnable task) {
         mainThread.add(task);
@@ -330,6 +379,12 @@ final class EditorContext {
 
     boolean importing() {
         return importsRunning > 0;
+    }
+
+    /** Something added a file to the project (the Sound Maker saved a sound): the Project panel looks again. */
+    void assetsChanged() {
+        assetsVersion++;
+        project.rescanAssets();
     }
 
     /** Bumps when imports finish, so the Project panel knows to look at the folder again. */
@@ -569,6 +624,17 @@ final class EditorContext {
         return paintTile;
     }
 
+    /** Starts sculpting this entity's Terrain in the Scene view, or stops (null). */
+    void sculpt(Entity entity) {
+        sculptingId = entity == null ? -1 : entity.id();
+    }
+
+    /** The terrain being sculpted, if it's still selected (sculpting stops when the selection changes or Play starts). */
+    Entity sculptingTerrain() {
+        Entity selected = selected();
+        return !playing() && selected != null && selected.id() == sculptingId && selected.has(Terrain.class) ? selected : null;
+    }
+
     void setPaintTile(int tile) {
         paintTile = tile;
     }
@@ -587,6 +653,7 @@ final class EditorContext {
     void saveAll() {
         scripts.saveAll();
         eights.saveAll();
+        if (animation != null) animation.endPreview(); // the scene is saved as it really is, not posed by a preview
         if (playing() && !live()) {
             log.warning("Scene not saved: stop playing first (changes made during Play aren't kept; turn on Live Mode to keep them)");
             return;
@@ -626,6 +693,7 @@ final class EditorContext {
     void play() {
         scripts.saveAll(); // scripts and graphs are read from disk, so make sure they're current
         eights.saveAll();
+        if (animation != null) animation.endPreview(); // play the real scene, not a previewed pose (clips are saved already)
         input.reset();
         game = new Game(SceneSerializer.copy(editScene), log, input);
         log.system("Playing " + project.name() + "  (click the Game view to give it the keyboard)"
@@ -712,6 +780,7 @@ final class EditorContext {
             }
             reloadChangedScripts(dt);
         }
+        input.pollGamepad();
         if (!paused) game.update(dt);
         if (game.successor() != null) {
             game = game.successor(); // a script loaded another scene or a saved game

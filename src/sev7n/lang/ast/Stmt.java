@@ -16,7 +16,8 @@ public sealed interface Stmt {
 
     record If(Expr condition, Stmt thenBranch, Stmt elseBranch) implements Stmt { }
 
-    record While(Expr condition, Stmt body) implements Stmt { }
+    /** 'step' runs after each time round, even after 'continue' (null for a plain while; a C-style for's i++). */
+    record While(Expr condition, Stmt body, Expr step) implements Stmt { }
 
     /** for item in list { }   or   for i in 0..10 { } */
     record For(Token variable, Expr iterable, Stmt body) implements Stmt { }

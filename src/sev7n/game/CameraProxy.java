@@ -53,7 +53,7 @@ final class CameraProxy implements SevenObject {
                 if (!(value instanceof Color color)) throw new SevenError("camera.background must be a color", line);
                 camera.background = color;
             }
-            default -> throw new SevenError("camera." + name + " can't be changed", line);
+            default -> throw cantChange("camera." + name, name, line);
         }
     }
 

@@ -47,6 +47,10 @@ public final class Shader implements AutoCloseable {
         glUniformMatrix4fv(location(name), false, matrix.get(matrixBuffer));
     }
 
+    public void set(String name, float x, float y) {
+        glUniform2f(location(name), x, y);
+    }
+
     public void set(String name, float x, float y, float z) {
         glUniform3f(location(name), x, y, z);
     }

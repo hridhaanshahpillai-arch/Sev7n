@@ -47,6 +47,24 @@ public final class RenderSettings {
         }
     }
 
+    /** How sharp shadows are: the size of the picture of the scene the light takes (0 = no shadows). */
+    public enum Shadows {
+        OFF("Off", 0, "No shadows: the fastest"),
+        LOW("Low", 1024, "Soft, slightly blurry shadows. Good for slow PCs"),
+        MEDIUM("Medium", 2048, "Clean shadows for most games"),
+        HIGH("High", 4096, "Crisp shadows, even on small things");
+
+        public final String label;
+        public final int mapSize;
+        public final String description;
+
+        Shadows(String label, int mapSize, String description) {
+            this.label = label;
+            this.mapSize = mapSize;
+            this.description = description;
+        }
+    }
+
     public Api api = Api.OPENGL;
     public Shading shading = Shading.LIT;
     /** Resolution compared to the window: 0.25 is chunky retro pixels, 1 is sharp, 2 is extra smooth. */
@@ -60,6 +78,10 @@ public final class RenderSettings {
     /** Where fog starts and where everything is fully faded ("render distance"), in units. */
     public double fogStart = 30;
     public double fogEnd = 80;
+    /** Shadows cast by the scene's Directional Light. */
+    public Shadows shadows = Shadows.MEDIUM;
+    /** How far from the camera shadows are drawn, in units: shorter is sharper. */
+    public double shadowDistance = 60;
     /** 0.6 = moody, 1 = normal, 1.5 = bright. */
     public double brightness = 1;
     /** The game's frame rate limit: 0 = unlimited. */
@@ -75,18 +97,21 @@ public final class RenderSettings {
                 renderScale = 1;
                 antiAliasing = 8;
                 pixelatedTextures = false;
+                shadows = Shadows.HIGH;
             }
             case "Fast" -> {
                 shading = Shading.LIT;
                 renderScale = 0.75;
                 antiAliasing = 0;
                 pixelatedTextures = false;
+                shadows = Shadows.LOW;
             }
             case "Retro" -> {
                 shading = Shading.FLAT;
                 renderScale = 0.33;
                 antiAliasing = 0;
                 pixelatedTextures = true;
+                shadows = Shadows.OFF;
             }
             default -> { }
         }
@@ -107,6 +132,12 @@ public final class RenderSettings {
             } catch (IllegalArgumentException ignored) {
                 // unknown API from a newer version: keep OpenGL
             }
+            try {
+                settings.shadows = Shadows.valueOf(Json.string(in, "shadows", "MEDIUM"));
+            } catch (IllegalArgumentException ignored) {
+                // unknown quality from a newer version: keep Medium
+            }
+            settings.shadowDistance = clamp(Json.number(in, "shadowDistance", settings.shadowDistance), 5, 500);
             settings.renderScale = clamp(Json.number(in, "renderScale", settings.renderScale), 0.1, 2);
             settings.antiAliasing = (int) Json.number(in, "antiAliasing", settings.antiAliasing);
             settings.pixelatedTextures = Json.bool(in, "pixelatedTextures", settings.pixelatedTextures);
@@ -132,6 +163,8 @@ public final class RenderSettings {
         out.put("fog", fog);
         out.put("fogStart", fogStart);
         out.put("fogEnd", fogEnd);
+        out.put("shadows", shadows.name());
+        out.put("shadowDistance", shadowDistance);
         out.put("brightness", brightness);
         out.put("maxFps", maxFps);
         out.put("vsync", vsync);

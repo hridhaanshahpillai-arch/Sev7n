@@ -141,13 +141,30 @@ final class Widgets {
 
     /** A full-width button in the accent color, for the main action of a panel. */
     static boolean primaryButton(String label) {
+        pushAccent();
+        boolean clicked = ImGui.button(label, -1, 0);
+        popAccent();
+        return clicked;
+    }
+
+    /** An accent-colored button only as wide as its label (sits in a row with others). */
+    static boolean primaryButtonInline(String label) {
+        pushAccent();
+        boolean clicked = ImGui.button(label);
+        popAccent();
+        return clicked;
+    }
+
+    /** Buttons drawn until popAccent() are purple: the chosen tool, or the main action. */
+    static void pushAccent() {
         ImGui.pushStyleColor(ImGuiCol.Button, EditorStyle.pack(Theme.ACCENT));
         ImGui.pushStyleColor(ImGuiCol.ButtonHovered, EditorStyle.pack(Theme.ACCENT_HOVER));
         ImGui.pushStyleColor(ImGuiCol.ButtonActive, EditorStyle.pack(Theme.ACCENT));
         ImGui.pushStyleColor(ImGuiCol.Text, EditorStyle.pack(Theme.BLACK));
-        boolean clicked = ImGui.button(label, -1, 0);
+    }
+
+    static void popAccent() {
         ImGui.popStyleColor(4);
-        return clicked;
     }
 
     /**

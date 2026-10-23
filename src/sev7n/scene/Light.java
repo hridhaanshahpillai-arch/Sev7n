@@ -12,6 +12,10 @@ public final class Light extends Component {
     public Color color = Color.WHITE;
     public double intensity = 1.0;
     public double ambient = 0.25;     // how bright surfaces facing away from the light are
+    /** Things block this light and leave shadows (how sharp: Settings > Graphics > Shadows). */
+    public boolean shadows = true;
+    /** How dark shadows are: 0 = invisible, 1 = only ambient light gets in. */
+    public double shadowStrength = 0.8;
 
     @Override
     public String type() {
@@ -28,6 +32,8 @@ public final class Light extends Component {
         out.put("color", Json.color(color));
         out.put("intensity", intensity);
         out.put("ambient", ambient);
+        out.put("shadows", shadows);
+        out.put("shadowStrength", shadowStrength);
     }
 
     @Override
@@ -35,5 +41,7 @@ public final class Light extends Component {
         color = Json.color(in, "color", color);
         intensity = Json.number(in, "intensity", intensity);
         ambient = Json.number(in, "ambient", ambient);
+        shadows = Json.bool(in, "shadows", shadows);
+        shadowStrength = Math.max(0, Math.min(1, Json.number(in, "shadowStrength", shadowStrength)));
     }
 }

@@ -17,6 +17,7 @@ org/lwjgl/lwjgl-opengl/$LWJGL/lwjgl-opengl-$LWJGL.jar
 org/lwjgl/lwjgl-vulkan/$LWJGL/lwjgl-vulkan-$LWJGL.jar
 org/lwjgl/lwjgl-shaderc/$LWJGL/lwjgl-shaderc-$LWJGL.jar
 org/lwjgl/lwjgl-tinyfd/$LWJGL/lwjgl-tinyfd-$LWJGL.jar
+org/lwjgl/lwjgl-stb/$LWJGL/lwjgl-stb-$LWJGL.jar
 org/joml/joml/$JOML/joml-$JOML.jar
 io/github/spair/imgui-java-binding/$IMGUI/imgui-java-binding-$IMGUI.jar
 io/github/spair/imgui-java-lwjgl3/$IMGUI/imgui-java-lwjgl3-$IMGUI.jar
@@ -27,7 +28,7 @@ org/lwjgl/lwjgl-vulkan/$LWJGL/lwjgl-vulkan-$LWJGL-natives-macos.jar
 org/lwjgl/lwjgl-vulkan/$LWJGL/lwjgl-vulkan-$LWJGL-natives-macos-arm64.jar
 "
 # every platform's native code, so one sev7n.jar runs everywhere
-for module in lwjgl lwjgl-glfw lwjgl-opengl lwjgl-shaderc lwjgl-tinyfd; do
+for module in lwjgl lwjgl-glfw lwjgl-opengl lwjgl-shaderc lwjgl-tinyfd lwjgl-stb; do
     for platform in windows macos macos-arm64 linux linux-arm64; do
         ARTIFACTS="$ARTIFACTS org/lwjgl/$module/$LWJGL/$module-$LWJGL-natives-$platform.jar"
     done

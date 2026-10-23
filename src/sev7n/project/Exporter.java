@@ -138,6 +138,8 @@ public final class Exporter {
         Files.copy(project.scenePath(), target.resolve(project.scenePath().getFileName()));
         Path graphics = project.root().resolve("game.json"); // the game's graphics settings
         if (Files.exists(graphics)) Files.copy(graphics, target.resolve("game.json"));
+        Path audio = project.root().resolve(sev7n.audio.MixerSettings.FILE_NAME); // the Audio Mixer's volumes
+        if (Files.exists(audio)) Files.copy(audio, target.resolve(sev7n.audio.MixerSettings.FILE_NAME));
         for (Path folder : List.of(project.scriptsFolder(), project.assetsFolder(), project.scenesFolder())) {
             if (Files.isDirectory(folder)) AssetImporter.copyTree(folder, target.resolve(folder.getFileName()));
         }

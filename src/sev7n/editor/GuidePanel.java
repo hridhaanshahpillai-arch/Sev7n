@@ -58,6 +58,9 @@ final class GuidePanel {
             new Guide("First-person and Open Worlds", Path.of("docs", "WORLDS.md")),
             new Guide("Scenes, Saves and Prefabs", Path.of("docs", "SCENES.md")),
             new Guide("HUD, Menus and Sound", Path.of("docs", "HUD.md")),
+            new Guide("Sound and Music", Path.of("docs", "AUDIO.md")),
+            new Guide("Cameras and Controls", Path.of("docs", "CONTROLS.md")),
+            new Guide("Multiplayer", Path.of("docs", "MULTIPLAYER.md")),
             new Guide("Ragdolls", Path.of("docs", "RAGDOLLS.md")),
             new Guide("NPCs and AI", Path.of("docs", "NPC.md")),
             new Guide("Particle Effects", Path.of("docs", "EFFECTS.md")),
@@ -351,7 +354,6 @@ final class GuidePanel {
 
         ImGui.pushStyleColor(ImGuiCol.ChildBg, EditorStyle.pack(Theme.PANEL));
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, pad, pad);
-        ImVec2 top = ImGui.getCursorScreenPos();
         int flags = ImGuiWindowFlags.AlwaysUseWindowPadding | ImGuiWindowFlags.NoScrollWithMouse
                 | (scrolls ? ImGuiWindowFlags.HorizontalScrollbar : ImGuiWindowFlags.NoScrollbar);
         ImGui.beginChild("##code", width, height, false, flags);
@@ -361,17 +363,16 @@ final class GuidePanel {
             drawColoredLine(code.lines().get(line), colors[line]);
         }
         ImGui.popFont();
+
+        // copy button in the top-right corner. It's inside the box: a button drawn over the box from
+        // outside never gets clicked, because the box takes the mouse. It follows the scroll, so it stays put.
+        String label = "Copy";
+        float buttonWidth = ImGui.calcTextSize(label).x + ImGui.getStyle().getFramePaddingX() * 2;
+        ImGui.setCursorPos(ImGui.getScrollX() + width - buttonWidth - pad / 2, pad / 2);
+        if (ImGui.smallButton(label)) ImGui.setClipboardText(String.join("\n", code.lines()));
         ImGui.endChild();
         ImGui.popStyleVar();
         ImGui.popStyleColor();
-
-        // copy button over the top-right corner (drawn outside the box so it never makes it scroll)
-        ImVec2 after = ImGui.getCursorScreenPos();
-        String label = "Copy";
-        float buttonWidth = ImGui.calcTextSize(label).x + ImGui.getStyle().getFramePaddingX() * 2;
-        ImGui.setCursorScreenPos(top.x + width - buttonWidth - pad / 2, top.y + pad / 2);
-        if (ImGui.smallButton(label)) ImGui.setClipboardText(String.join("\n", code.lines()));
-        ImGui.setCursorScreenPos(after.x, after.y);
     }
 
     /** Seven code gets syntax colors; anything else is shown plain. */

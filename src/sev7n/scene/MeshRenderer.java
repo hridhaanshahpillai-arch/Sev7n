@@ -22,6 +22,8 @@ public final class MeshRenderer extends Component {
      * .glb / .gltf characters) need 180 to face the object's forward, the way NPCs walk.
      */
     public double turn = 0;
+    /** Blocks the Directional Light, leaving a shadow (turn off for things like glass or far-away scenery). */
+    public boolean castShadows = true;
 
     /** True for built-in shapes, false for imported model files. */
     public static boolean isBuiltIn(String mesh) {
@@ -44,6 +46,7 @@ public final class MeshRenderer extends Component {
         out.put("color", Json.color(color));
         if (!texture.isEmpty()) out.put("texture", texture);
         if (turn != 0) out.put("turn", turn);
+        if (!castShadows) out.put("castShadows", false);
     }
 
     @Override
@@ -52,5 +55,6 @@ public final class MeshRenderer extends Component {
         color = Json.color(in, "color", color);
         texture = Json.string(in, "texture", texture);
         turn = Json.number(in, "turn", 0);
+        castShadows = Json.bool(in, "castShadows", true);
     }
 }

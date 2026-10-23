@@ -109,6 +109,30 @@ public final class Hierarchy {
         return Math.abs(a.x - b.x) < SAME && Math.abs(a.y - b.y) < SAME && Math.abs(a.z - b.z) < SAME;
     }
 
+    /** Where the entity is relative to its parent (in the world if it has none), as a new Transform. */
+    public static Transform localOf(Scene scene, Entity e) {
+        Transform local = new Transform();
+        Entity parent = e.parent >= 0 ? scene.findById(e.parent) : null;
+        if (parent == null) {
+            local.copyFrom(e.transform);
+            return local;
+        }
+        Matrix4f toParent = parent.transform.matrix(new Matrix4f()).invert();
+        apply(toParent.mul(e.transform.matrix(new Matrix4f())), local);
+        return local;
+    }
+
+    /** Puts the entity at 'local' relative to its parent (in the world if it has none); it keeps following from there. */
+    public static void setLocal(Scene scene, Entity e, Transform local) {
+        Entity parent = e.parent >= 0 ? scene.findById(e.parent) : null;
+        if (parent == null) {
+            e.transform.copyFrom(local); // no matrix round trip: angles stay exactly as given (spinning past 360 keeps going)
+            return;
+        }
+        apply(parent.transform.matrix(new Matrix4f()).mul(local.matrix(new Matrix4f())), e.transform);
+        remember(e, parent);
+    }
+
     // ---------------------------------------------------------------- changing the family tree
 
     /** Makes 'child' a child of 'parent' (null: no parent), staying where it is. False if that would make a loop. */

@@ -4,8 +4,9 @@ import org.joml.Matrix4f;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.nio.ByteBuffer;
 
-import static org.lwjgl.opengl.GL11C.*;
+import static org.lwjgl.opengl.GL33C.*;
 
 /**
  * Draws with OpenGL 3.3: the editor always uses this, and so do games unless Vulkan is
@@ -13,10 +14,22 @@ import static org.lwjgl.opengl.GL11C.*;
  */
 public final class GlBackend implements GraphicsBackend {
 
+    private static final int SHADOW_UNIT = 1; // the shadow map's texture unit (pictures use 0)
+
     private final Shader lit = new Shader(Shaders.LIT_VERTEX, Shaders.LIT_FRAGMENT);
     private final Shader sprite = new Shader(Shaders.LIT_VERTEX, Shaders.SPRITE_FRAGMENT);
     private final Shader unlit = new Shader(Shaders.UNLIT_VERTEX, Shaders.UNLIT_FRAGMENT);
+    private final Shader shadow = new Shader(Shaders.SHADOW_VERTEX, Shaders.SHADOW_FRAGMENT);
     private final String description = "OpenGL " + glGetString(GL_VERSION) + " on " + glGetString(GL_RENDERER);
+
+    // the shadow map: a depth picture of the scene from the light, and the framebuffer that draws it
+    private final int shadowTexture = glGenTextures();
+    private final int shadowFramebuffer = glGenFramebuffers();
+    private int shadowSize;
+
+    public GlBackend() {
+        resizeShadowMap(1); // always something to bind, even with shadows off
+    }
 
     /** Which kind of drawing the GL state is set up for, so it only changes when needed. */
     private enum Mode { NONE, LIT, SPRITE, PARTICLE, LINES }
@@ -43,6 +56,67 @@ public final class GlBackend implements GraphicsBackend {
     public GpuTexture texture(BufferedImage image, boolean pixelArt) {
         return Texture.fromImage(image, pixelArt);
     }
+
+    // ---------------------------------------------------------------- shadows
+
+    private void resizeShadowMap(int size) {
+        shadowSize = size;
+        glBindTexture(GL_TEXTURE_2D, shadowTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT, GL_FLOAT, (ByteBuffer) null);
+        // reading it compares depths (smoothly between pixels); outside it, nothing is in shadow
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, new float[] {1, 1, 1, 1});
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowTexture, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        Framebuffer.rebind();
+    }
+
+    @Override
+    public void beginShadows(Matrix4f lightMatrix, int size) {
+        if (size != shadowSize) resizeShadowMap(size);
+        glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer);
+        glViewport(0, 0, size, size);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE); // two-sided, like everything else
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(true);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        // pushes the depth back a little (more on slopes), so surfaces don't shadow themselves
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.5f, 3f);
+
+        shadow.use();
+        shadow.set("uLightMatrix", lightMatrix);
+        shadow.setTextureUnit("uTexture", 0);
+        mode = Mode.NONE;
+    }
+
+    @Override
+    public void drawShadowCaster(GpuMesh mesh, GpuTexture texture, Matrix4f model) {
+        shadow.set("uModel", model);
+        if (texture != null) ((Texture) texture).bind(0);
+        shadow.set("uUseTexture", texture != null ? 1 : 0);
+        ((Mesh) mesh).draw();
+    }
+
+    @Override
+    public void endShadows() {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        Framebuffer.rebind(); // back to the picture the frame is drawn into
+    }
+
+    // ---------------------------------------------------------------- the frame
 
     @Override
     public void begin(Frame frame) {
@@ -158,6 +232,13 @@ public final class GlBackend implements GraphicsBackend {
             lit.set("uLightDirection", frame.lightDirection().x, frame.lightDirection().y, frame.lightDirection().z);
             lit.set("uLightColor", frame.lightColor().x, frame.lightColor().y, frame.lightColor().z);
             lit.set("uAmbient", frame.ambient());
+            Shadows shadows = frame.shadows();
+            glActiveTexture(GL_TEXTURE0 + SHADOW_UNIT);
+            glBindTexture(GL_TEXTURE_2D, shadowTexture);
+            glActiveTexture(GL_TEXTURE0);
+            lit.setTextureUnit("uShadowMap", SHADOW_UNIT);
+            if (shadows != null) lit.set("uShadowMatrix", shadows.matrix());
+            lit.set("uShadow", shadows != null ? shadows.strength() : 0, shadows != null ? shadows.texel() : 0);
         }
     }
 
@@ -166,5 +247,8 @@ public final class GlBackend implements GraphicsBackend {
         lit.close();
         sprite.close();
         unlit.close();
+        shadow.close();
+        glDeleteFramebuffers(shadowFramebuffer);
+        glDeleteTextures(shadowTexture);
     }
 }

@@ -159,6 +159,19 @@ public final class NodeLibrary {
                 .execOut("").out("Other", ENTITY).keywords("exit leave stop touching trigger")
                 .event((code, n) -> function("onCollideEnd", "other"))
                 .value((code, n, out) -> "other"));
+        // multiplayer
+        add(NodeType.builder("event.playerJoined", "On Player Joined", EVENTS).describe("Someone joined the game (multiplayer): their player number")
+                .execOut("").out("Player", NUMBER).keywords("multiplayer network online join")
+                .event((code, n) -> function("onPlayerJoined", "player"))
+                .value((code, n, out) -> "player"));
+        add(NodeType.builder("event.playerLeft", "On Player Left", EVENTS).describe("Someone left the game (multiplayer)")
+                .execOut("").out("Player", NUMBER).keywords("multiplayer network online leave quit")
+                .event((code, n) -> function("onPlayerLeft", "player"))
+                .value((code, n, out) -> "player"));
+        add(NodeType.builder("event.netMessage", "On Network Message", EVENTS).describe("Another player sent a message with Send Message (multiplayer)")
+                .execOut("").out("Name", STRING).out("Value", ANY).out("From", NUMBER).keywords("multiplayer network online receive")
+                .event((code, n) -> function("onMessage", "name, value, from"))
+                .value((code, n, out) -> out == 0 ? "name" : out == 1 ? "value" : "from"));
         add(NodeType.builder(KEY_PRESSED, "On Key Pressed", EVENTS).describe("The frame a key goes down")
                 .in("Key", STRING, "space").execOut("")
                 .inUpdate((code, n) -> code.block("if keyPressed(" + code.input(n, 0) + ") {", n, 0)));
@@ -464,6 +477,11 @@ public final class NodeLibrary {
                 }));
         value("value.overlapSphere", "Overlap Sphere", PHYSICS, "Every object whose collider is inside a ball (explosions, pickups in reach)",
                 "Objects", LIST, "overlapSphere({0}, {1})", pin("Center", VEC3, new Vec3()), pin("Radius", NUMBER, 2.0)).keywords("nearby area radius");
+        value("world.groundHeight", "Ground Height", WORLD, "How high the terrain is at a spot (none off the land)",
+                "Height", NUMBER, "groundHeight({0}, {1})", pin("X", NUMBER, 0.0), pin("Z", NUMBER, 0.0)).keywords("terrain land floor y");
+        action("world.sculpt", "Sculpt Terrain", WORLD, "Changes the land while playing: craters, digging, building up",
+                "sculpt({0}, {1}, {2}, {3})", pin("Brush", STRING, "lower"), pin("Position", VEC3, new Vec3()),
+                pin("Radius", NUMBER, 3.0), pin("Amount", NUMBER, 1.0)).keywords("terrain crater dig raise lower flatten smooth explosion");
         value("value.solidAt", "Is Solid At", PHYSICS, "True if a solid collider or tile is at a point", "Solid", BOOL, "solidAt({0})",
                 pin("Point", VEC3, new Vec3()));
     }
@@ -491,6 +509,37 @@ public final class NodeLibrary {
         value("value.moveInput2D", "Move Input 2D", INPUT, "Which way the WASD or arrow keys point, for 2D (X = right, Y = up)", "Direction", VEC3,
                 "vec2((key(\"d\") or key(\"right\") ? 1 : 0) - (key(\"a\") or key(\"left\") ? 1 : 0), (key(\"w\") or key(\"up\") ? 1 : 0) - (key(\"s\") or key(\"down\") ? 1 : 0))")
                 .keywords("wasd arrows axis platformer");
+        // gamepads
+        value("value.padConnected", "Is Gamepad Connected", INPUT, "True while a gamepad (Xbox, PlayStation, Switch Pro...) is plugged in", "Connected", BOOL,
+                "padConnected()").keywords("controller joystick xbox");
+        value("value.padButton", "Is Pad Button Held", INPUT, "True while a gamepad button is down: A B X Y, LB RB, BACK START, LS RS, UP DOWN LEFT RIGHT",
+                "Held", BOOL, "padButton({0})", pin("Button", STRING, "A")).keywords("controller gamepad joystick");
+        value("value.padPressed", "Was Pad Button Pressed", INPUT, "True only on the frame a gamepad button went down", "Pressed", BOOL,
+                "padPressed({0})", pin("Button", STRING, "A")).keywords("controller gamepad joystick jump");
+        value("value.padAxis", "Pad Stick / Trigger", INPUT, "A stick (LX, LY, RX, RY: -1 to 1) or trigger (LT, RT: 0 to 1)", "Amount", NUMBER,
+                "padAxis({0})", pin("Axis", STRING, "LX")).keywords("controller gamepad joystick analog");
+        value("value.padMove", "Move Input (Left Stick)", INPUT, "Which way the left stick points, on the ground (X = right, Z = back), like Move Input (WASD)",
+                "Direction", VEC3, "vec3(padAxis(\"LX\"), 0, padAxis(\"LY\"))").keywords("controller gamepad joystick direction");
+        // multiplayer
+        action("action.connect", "Connect", INPUT, "Multiplayer: hosts, or joins if this PC already hosts (run the game twice to test alone)",
+                "connect()").keywords("multiplayer network online host join");
+        action("action.sendMessage", "Send Message", INPUT, "Multiplayer: every other player gets On Message", "sendMessage({0}, {1})",
+                pin("Name", STRING, "hello"), pin("Value", ANY, null)).keywords("multiplayer network online send");
+        action("action.share", "Share Value", INPUT, "Multiplayer: a value of yours everyone can read (your position, health...)", "share({0}, {1})",
+                pin("Key", STRING, "position"), pin("Value", ANY, null)).keywords("multiplayer network online sync");
+        value("value.shared", "Shared Value", INPUT, "Multiplayer: a value another player shared", "Value", ANY, "shared({0}, {1})",
+                pin("Player", NUMBER, 2.0), pin("Key", STRING, "position")).keywords("multiplayer network online sync");
+        value("value.playerId", "My Player Number", INPUT, "Multiplayer: your player number (1 = the host)", "Player", NUMBER, "playerId()")
+                .keywords("multiplayer network online id");
+        value("value.players", "Players", INPUT, "Multiplayer: everyone's player numbers", "Players", LIST, "players()")
+                .keywords("multiplayer network online list");
+        value("value.isHost", "Is Host", INPUT, "Multiplayer: true for the game everyone joined", "Host", BOOL, "isHost()")
+                .keywords("multiplayer network online server");
+        // the third person camera's view
+        value("value.cameraForward", "Camera Forward", INPUT, "Where the camera looks, flat on the ground: move a character this way for \"forward\"",
+                "Forward", VEC3, "cameraForward()").keywords("third person relative direction");
+        value("value.cameraRight", "Camera Right", INPUT, "The camera's right, flat on the ground", "Right", VEC3, "cameraRight()")
+                .keywords("third person relative direction strafe");
     }
 
     // ---------------------------------------------------------------- characters: animation, ragdolls, NPCs
@@ -622,6 +671,27 @@ public final class NodeLibrary {
         action("sound.stopMusic", "Stop Music", SOUND, "Stops the music", "stopMusic()");
         action("sound.setVolume", "Set Volume", SOUND, "The volume of everything, 0 (silent) to 1", "setVolume({0})", pin("Volume", NUMBER, 1.0)).keywords("mute");
         value("sound.volume", "Volume", SOUND, "The volume of everything, 0 to 1", "Volume", NUMBER, "volume()");
+        action("sound.playPitched", "Play Sound (Pitch)", SOUND, "Plays a sound at a pitch: 2 = higher and faster, 0.5 = lower. Random pitches stop repeats sounding samey",
+                "playSound({0}, {1}, {2})", pin("Sound", STRING, "assets/sounds/hit.wav"), pin("Volume", NUMBER, 1.0), pin("Pitch", NUMBER, 1.0))
+                .keywords("random variety speed");
+        action("sound.crossfade", "Crossfade Music", SOUND, "Switches to other music, fading between them", "playMusic({0}, {1}, {2})",
+                pin("Music", STRING, "assets/sounds/music.ogg"), pin("Volume", NUMBER, 0.6), pin("Seconds", NUMBER, 2.0)).keywords("fade song change");
+        action("sound.fadeOutMusic", "Fade Out Music", SOUND, "Fades the music away", "stopMusic({0})", pin("Seconds", NUMBER, 2.0)).keywords("stop quiet");
+        action("sound.busVolume", "Set Bus Volume", SOUND, "One Audio Mixer group's volume (Music, Effects, Ambient, Voice, UI), 0 to 1",
+                "setBusVolume({0}, {1})", pin("Bus", STRING, "Music"), pin("Volume", NUMBER, 0.5)).keywords("mixer group music effects options");
+        value("sound.getBusVolume", "Bus Volume", SOUND, "One Audio Mixer group's volume, 0 to 1", "Volume", NUMBER, "busVolume({0})", pin("Bus", STRING, "Music"))
+                .keywords("mixer");
+        action("sound.muteBus", "Mute Bus", SOUND, "Silences (or brings back) one Audio Mixer group", "muteBus({0}, {1})",
+                pin("Bus", STRING, "Music"), pin("Muted", BOOL, true)).keywords("mixer silence");
+        action("sound.playSource", "Play Audio Source", SOUND, "Plays an object's Audio Source from the start", "{0}.playAudio()", TARGET).keywords("start emitter");
+        action("sound.stopSource", "Stop Audio Source", SOUND, "Stops an object's Audio Source", "{0}.stopAudio()", TARGET);
+        action("anim.playClip", "Play Clip", CHARACTERS, "Plays an object's keyframe animation (Animation Player) from the start",
+                "{0}.playClip()", TARGET).keywords("keyframe timeline door platform animation");
+        action("anim.playNamedClip", "Play Clip Named", CHARACTERS, "Plays another keyframe animation on an object (a name in assets/animations)",
+                "{0}.playClip({1})", TARGET, pin("Clip", STRING, "door_open")).keywords("keyframe timeline animation switch");
+        action("anim.stopClip", "Stop Clip", CHARACTERS, "Stops an object's keyframe animation where it is", "{0}.stopClip()", TARGET);
+        value("anim.clipPlaying", "Is Clip Playing", CHARACTERS, "True while an object's keyframe animation plays", "Playing", BOOL, "{0}.clipPlaying", TARGET);
+        value("sound.sourcePlaying", "Is Audio Playing", SOUND, "True while an object's Audio Source plays", "Playing", BOOL, "{0}.audioPlaying", TARGET);
     }
 
     // ---------------------------------------------------------------- scenes, saves, prefabs, pausing
@@ -679,6 +749,12 @@ public final class NodeLibrary {
         action("world.lightColor", "Set Light Color", WORLD, "A Directional Light's color", "{0}.lightColor = {1}", TARGET, pin("Color", COLOR, new Color(0xFFF1D6)))
                 .keywords("sun");
         action("world.lightAmbient", "Set Light Ambient", WORLD, "How bright the shadowed side is", "{0}.lightAmbient = {1}", TARGET, pin("Ambient", NUMBER, 0.25));
+        action("world.lightShadows", "Set Light Shadows", WORLD, "Turns a Directional Light's shadows on or off", "{0}.lightShadows = {1}", TARGET,
+                pin("On", BOOL, true)).keywords("shadow sun");
+        action("world.shadowStrength", "Set Shadow Strength", WORLD, "How dark a Directional Light's shadows are (0 to 1)", "{0}.lightShadowStrength = {1}", TARGET,
+                pin("Strength", NUMBER, 0.8)).keywords("shadow dark sun");
+        action("world.castShadows", "Set Casts Shadows", WORLD, "Whether an object leaves a shadow", "{0}.castShadows = {1}", TARGET,
+                pin("On", BOOL, true)).keywords("shadow invisible ghost");
         action("world.cameraFov", "Set Field Of View", WORLD, "How wide a Camera sees, in degrees (zoom in with less)", "{0}.camera.fieldOfView = {1}", TARGET,
                 pin("Degrees", NUMBER, 60.0)).keywords("zoom aim scope");
         action("world.cameraBackground", "Set Sky Color", WORLD, "A Camera's background color (and fog's)", "{0}.camera.background = {1}", TARGET,

@@ -11,6 +11,7 @@ import java.awt.image.BufferedImage;
  * Vulkan (VulkanBackend, for the game window when chosen in Settings).
  *
  * SceneRenderer decides what to draw and in what order; a backend only knows how. One frame:
+ *   beginShadows / drawShadowCaster / endShadows   (only with shadows on) the scene's depth as the light sees it
  *   begin(frame)   clear, and set the camera, light and look every draw shares
  *   drawLit / drawSprite / drawLines, as many as needed
  *   end()
@@ -20,7 +21,23 @@ public interface GraphicsBackend extends AutoCloseable {
 
     /** What every draw in a frame shares. 'lightColor' is already multiplied by the light's intensity. */
     record Frame(RenderView view, Color background, Vector3f lightDirection, Vector3f lightColor, float ambient,
-                 RenderSettings settings) { }
+                 RenderSettings settings, Shadows shadows) { }
+
+    /**
+     * The shadows lit surfaces get this frame, from the shadow map drawn just before.
+     * @param matrix    world to the light's view (the one given to beginShadows)
+     * @param strength  0..1: how dark shadows are
+     * @param texel     how wide one shadow map pixel is in the world, to lift surfaces off their own shadow
+     */
+    record Shadows(Matrix4f matrix, float strength, float texel) { }
+
+    /** Starts drawing the shadow map (size x size pixels) from the light: world to its view with this matrix. */
+    void beginShadows(Matrix4f lightMatrix, int size);
+
+    /** Something that blocks light. Textured ones let light through where their picture is see-through. */
+    void drawShadowCaster(GpuMesh mesh, GpuTexture texture, Matrix4f model);
+
+    void endShadows();
 
     GpuMesh mesh(MeshData data);
 

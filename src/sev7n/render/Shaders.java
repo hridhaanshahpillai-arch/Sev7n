@@ -60,9 +60,29 @@ final class Shaders {
             uniform sampler2D uTexture;
             uniform float uUseTexture;      // 1 = multiply by the texture
             uniform int uShading;           // 0 lit, 1 flat, 2 toon (wireframe draws lit lines)
+            uniform sampler2DShadow uShadowMap;
+            uniform mat4 uShadowMatrix;
+            uniform vec2 uShadow;           // x: strength (0 = no shadows), y: world size of a shadow map pixel
 
             out vec4 fragColor;
             """ + FINISH + """
+
+            // how much sunlight reaches this point: 1 = all, less in shadow
+            float sunlight(vec3 position, vec3 normal) {
+                if (uShadow.x <= 0.0) return 1.0;
+                vec4 p = uShadowMatrix * vec4(position + normal * uShadow.y * 1.5, 1.0);
+                vec3 at = p.xyz / p.w * 0.5 + 0.5;
+                float edge = max(abs(at.x - 0.5), abs(at.y - 0.5)) * 2.0;
+                if (edge >= 1.0 || at.z >= 1.0) return 1.0;
+                // 9 samples, each blended by the hardware, for soft edges
+                vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+                float lit = 0.0;
+                for (int x = -1; x <= 1; x++)
+                    for (int y = -1; y <= 1; y++)
+                        lit += texture(uShadowMap, vec3(at.xy + vec2(x, y) * texel, at.z - 0.0004));
+                float shadow = (1.0 - lit / 9.0) * uShadow.x;
+                return 1.0 - shadow * (1.0 - smoothstep(0.8, 1.0, edge)); // fades out at the shadow distance
+            }
 
             void main() {
                 vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUV) : vec4(1.0);
@@ -79,9 +99,10 @@ final class Shaders {
                 if (dot(normal, toEye) < 0.0) normal = -normal;
 
                 vec3 toLight = normalize(-uLightDirection);
-                float diffuse = max(dot(normal, toLight), 0.0);
+                float sun = sunlight(vWorldPosition, normal);
+                float diffuse = max(dot(normal, toLight), 0.0) * sun;
                 vec3 halfway = normalize(toLight + toEye);
-                float highlight = pow(max(dot(normal, halfway), 0.0), 48.0) * 0.25;
+                float highlight = pow(max(dot(normal, halfway), 0.0), 48.0) * 0.25 * sun;
                 if (uShading == 2) {
                     diffuse = floor(diffuse * 3.0 + 0.5) / 3.0;          // three hard bands of light
                     highlight = highlight > 0.12 ? 0.35 : 0.0;           // one crisp shine
@@ -89,6 +110,35 @@ final class Shaders {
 
                 vec3 color = base * (uAmbient + diffuse * uLightColor) + highlight * uLightColor;
                 fragColor = vec4(finish(color, vWorldPosition, uEye), 1.0);
+            }
+            """;
+
+    /** The shadow map: only depth, as the light sees the scene. */
+    static final String SHADOW_VERTEX = """
+            #version 330 core
+            layout(location = 0) in vec3 aPosition;
+            layout(location = 2) in vec2 aUV;
+
+            uniform mat4 uModel;
+            uniform mat4 uLightMatrix;
+
+            out vec2 vUV;
+
+            void main() {
+                vUV = aUV;
+                gl_Position = uLightMatrix * uModel * vec4(aPosition, 1.0);
+            }
+            """;
+
+    static final String SHADOW_FRAGMENT = """
+            #version 330 core
+            in vec2 vUV;
+
+            uniform sampler2D uTexture;
+            uniform float uUseTexture;
+
+            void main() {
+                if (uUseTexture > 0.5 && texture(uTexture, vUV).a < 0.5) discard;  // light passes through cut-outs
             }
             """;
 

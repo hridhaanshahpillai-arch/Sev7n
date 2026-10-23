@@ -123,6 +123,7 @@ public final class GamePlayer {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
             double now = glfwGetTime();
+            input.pollGamepad();
             game.update(Math.min(now - last, 0.1));
             last = now;
             if (game.successor() != null) game = game.successor(); // another scene, or a loaded save

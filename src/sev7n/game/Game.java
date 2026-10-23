@@ -58,7 +58,10 @@ public final class Game {
     private final Collisions collisions = new Collisions();
     private final Physics physics = new Physics();
     private final Tweens tweens = new Tweens();
+    private final Clips clips = new Clips();
+    private Network network = Network.get(); // multiplayer (one per program; tests give each game its own)
     private Sound sound = new Sound(Path.of("."));
+    private boolean soundHandedOver; // the scene before passed its sound on (the music keeps going)
 
     private final Map<Entity, List<BehaviourInstance>> behaviours = new LinkedHashMap<>();
     private final Map<Entity, EntityProxy> proxies = new HashMap<>();
@@ -106,16 +109,21 @@ public final class Game {
     public boolean start(Path scriptsFolder) {
         this.scriptsFolder = scriptsFolder;
         if (scriptsFolder.toAbsolutePath().getParent() != null) {
-            sound = new Sound(scriptsFolder.toAbsolutePath().getParent());
+            if (!soundHandedOver) sound = new Sound(scriptsFolder.toAbsolutePath().getParent());
+            clips.setProjectFolder(scriptsFolder.toAbsolutePath().getParent());
             saveName = scriptsFolder.toAbsolutePath().getParent().getFileName().toString();
         }
         return guard(() -> {
+            sound.update(scene); // the ears are on the camera before anything plays
             loadScripts(scriptsFolder);
             for (Entity entity : new ArrayList<>(scene.entities())) {
                 for (Behaviour component : entity.getAll(Behaviour.class)) {
                     attach(entity, component.script, 0);
                 }
             }
+            // things set to play on start begin first, so scripts' start() can change or stop them
+            startAudioSources();
+            startClips();
             for (Map.Entry<Entity, List<BehaviourInstance>> entry : new ArrayList<>(behaviours.entrySet())) {
                 for (BehaviourInstance instance : new ArrayList<>(entry.getValue())) {
                     seven.callMethod(instance, "start");
@@ -123,6 +131,32 @@ public final class Game {
             }
             animate(0); // so sprites show their first frame straight away
         });
+    }
+
+    /** Animation Players set to play on start begin (posed at their first frame straight away). */
+    private void startClips() {
+        for (Entity entity : scene.entities()) {
+            sev7n.scene.AnimationPlayer player = entity.get(sev7n.scene.AnimationPlayer.class);
+            if (player == null || !player.playOnStart || player.clip.isBlank()) continue;
+            try {
+                clips.play(scene, entity, null);
+            } catch (IllegalArgumentException e) {
+                log.warning(entity.name + "'s Animation Player: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Audio Sources set to play on start begin; one that can't play says why in the console and the rest go on. */
+    private void startAudioSources() {
+        for (Entity entity : scene.entities()) {
+            sev7n.scene.AudioSource source = entity.get(sev7n.scene.AudioSource.class);
+            if (source == null || !source.playOnStart || !entity.active || source.clip.isBlank()) continue;
+            try {
+                sound.playSource(entity);
+            } catch (IllegalArgumentException e) {
+                log.warning(entity.name + "'s Audio Source: " + e.getMessage());
+            }
+        }
     }
 
     public void update(double dt) {
@@ -134,6 +168,7 @@ public final class Game {
         ui.beginFrame();
         final double scaled = dt;
         guard(() -> {
+            network.deliver(this::networkEvent, realDt); // players joining and leaving, messages; then our shared values go out
             // fixedUpdate(dt) runs at a steady FIXED_STEP, however fast the frames come
             // (steady steps are what physics-heavy and networked games need)
             fixedTime += scaled;
@@ -158,8 +193,11 @@ public final class Game {
             tweens.update(scaled, seven::callFunction);
             hour = (hour + scaled * 24 / dayLength) % 24;
             updateNpcs(scaled);
+            clips.update(scene, scaled, (entity, function) -> send(entity, function, new Object[0])); // before physics: riders go with animated platforms
             physics.step(scene, scaled);
             sev7n.scene.Hierarchy.update(scene); // children follow their parents
+            CameraRig.update(scene, input, realDt); // Third Person Cameras follow where things ended up
+            sound.update(scene);                 // ears on the camera, Audio Sources on their objects
             if (scaled > 0) updateRagdolls(scaled);
             animate(scaled);
             Collisions.Changes contacts = collisions.update(scene);
@@ -279,9 +317,10 @@ public final class Game {
             game.hour = hour;
             game.dayLength = dayLength;
             if (fadeLength > 0 && saved == null) game.fadeInLength = fadeLength; // came through a fade: fade back in
+            game.sound = sound.handOver(); // this scene's sounds stop; the music plays on into the next
+            game.soundHandedOver = true;
             game.start(scriptsFolder);
             if (saved != null) Snapshot.restore(game, saved);
-            stop();
             successor = game;
         } catch (IOException | RuntimeException e) {
             log.error("Couldn't " + (saved != null ? "load the saved game" : "open the scene \"" + wanted + "\"") + ": " + e.getMessage());
@@ -367,6 +406,30 @@ public final class Game {
     /** The game is over (Stop pressed, window closed): silences its sounds and music. */
     public void stop() {
         sound.stopAll();
+        if (network == Network.get()) Network.shutdown();
+        else network.close();
+    }
+
+    // ---------------------------------------------------------------- multiplayer
+
+    Network network() {
+        return network;
+    }
+
+    /** For tests: two games in one program, each with its own connection. */
+    public void useOwnNetwork() {
+        network = new Network();
+    }
+
+    private void networkEvent(Network.Event event) {
+        switch (event.kind()) {
+            case "connected" -> callAll("onConnected", (double) event.player());
+            case "disconnected" -> callAll("onDisconnected");
+            case "joined" -> callAll("onPlayerJoined", (double) event.player());
+            case "left" -> callAll("onPlayerLeft", (double) event.player());
+            case "message" -> callAll("onMessage", event.name(), event.value(), (double) event.player());
+            default -> log.warning("Network: " + event.name());
+        }
     }
 
     /** Every name scripts get for free (core + engine functions), e.g. for syntax highlighting. */
@@ -396,8 +459,17 @@ public final class Game {
         return sound;
     }
 
+    /** The game's audio engine (the editor's Audio Mixer shows its levels and changes its volumes live). */
+    public sev7n.audio.AudioMixer audioMixer() {
+        return sound.mixer();
+    }
+
     Tweens tweens() {
         return tweens;
+    }
+
+    Clips clips() {
+        return clips;
     }
 
     /** True if a point is inside something solid: a non-trigger collider or a solid tile. */

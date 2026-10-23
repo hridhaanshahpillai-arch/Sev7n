@@ -38,14 +38,138 @@ public final class Terrain extends Component {
     public Color rock = new Color(0x7D7C88);
     public Color snow = new Color(0xF0F0F4);
 
+    /** How the editor's sculpting brushes change the land. */
+    public enum Brush {
+        RAISE("Raise", "Builds the land up: hills and mountains"),
+        LOWER("Lower", "Digs the land down: valleys, lakes and pits"),
+        SMOOTH("Smooth", "Softens bumps and sharp edges"),
+        FLATTEN("Flatten", "Levels the land to the height where you started the stroke: paths, building spots");
+
+        public final String label;
+        public final String description;
+
+        Brush(String label, String description) {
+            this.label = label;
+            this.description = description;
+        }
+    }
+
+    /** Changes to sculpting anywhere (every terrain), so each change gets its own shape key. */
+    private static final java.util.concurrent.atomic.AtomicInteger SCULPT_CHANGES = new java.util.concurrent.atomic.AtomicInteger();
+
+    // hand-sculpted heights added on top of the generated land, one per grid corner ((sculptDetail+1) squared); null = none
+    private float[] sculpt;
+    private int sculptDetail;
+    private int sculptVersion;
+
     // worked out from the settings when they change (not saved)
     private String builtFor = "";
-    private float[] heights;
+    private String baseFor = "";
+    private float[] base;      // the generated land alone
+    private float[] heights;   // with the sculpting added
     private List<double[]> treeSpots = List.of();
 
-    /** What the land looks like now: a key that changes whenever a setting that shapes it changes. */
+    /** What the land looks like now: a key that changes whenever a setting (or sculpting) that shapes it changes. */
     public String shapeKey() {
-        return size + "|" + resolution + "|" + height + "|" + roughness + "|" + seed + "|" + flatRadius + "|" + trees;
+        return baseKey() + "|" + trees + "|" + sculptVersion;
+    }
+
+    private String baseKey() {
+        return size + "|" + resolution + "|" + height + "|" + roughness + "|" + seed + "|" + flatRadius;
+    }
+
+    // ---------------------------------------------------------------- sculpting
+
+    /** True if the land has been sculpted by hand. */
+    public synchronized boolean sculpted() {
+        return sculpt != null;
+    }
+
+    /** Takes away all the hand sculpting: back to the generated land. */
+    public synchronized void clearSculpt() {
+        sculpt = null;
+        sculptVersion = SCULPT_CHANGES.incrementAndGet();
+    }
+
+    /**
+     * One dab of a brush centred on (x, z) from the middle of the land, 'radius' wide, softer
+     * toward its edge. 'amount' at the centre: units up or down for Raise and Lower, how far to
+     * go (0..1) for Smooth and Flatten. Flatten levels toward 'target' (a height above the entity).
+     * Returns true if anything changed.
+     */
+    public synchronized boolean sculpt(Brush brush, double x, double z, double radius, double amount, double target) {
+        build();
+        int n = Math.max(2, resolution);
+        if (sculpt == null) {
+            sculpt = new float[(n + 1) * (n + 1)];
+            sculptDetail = n;
+        }
+        double cell = size / n;
+        int x0 = (int) Math.floor((x - radius) / cell + n / 2.0), x1 = (int) Math.ceil((x + radius) / cell + n / 2.0);
+        int z0 = (int) Math.floor((z - radius) / cell + n / 2.0), z1 = (int) Math.ceil((z + radius) / cell + n / 2.0);
+        x0 = Math.max(0, x0);
+        z0 = Math.max(0, z0);
+        x1 = Math.min(n, x1);
+        z1 = Math.min(n, z1);
+        if (x0 > x1 || z0 > z1 || radius <= 0) return false;
+        float[] before = heights.clone(); // smoothing reads the land as it was before this dab
+        boolean changed = false;
+        for (int iz = z0; iz <= z1; iz++) {
+            for (int ix = x0; ix <= x1; ix++) {
+                double px = ((double) ix / n - 0.5) * size, pz = ((double) iz / n - 0.5) * size;
+                double d = Math.hypot(px - x, pz - z) / radius;
+                if (d >= 1) continue;
+                double falloff = smooth(1 - d);
+                int i = iz * (n + 1) + ix;
+                double now = before[i];
+                double change = switch (brush) {
+                    case RAISE -> amount * falloff;
+                    case LOWER -> -amount * falloff;
+                    case SMOOTH -> (neighbourAverage(before, n, ix, iz) - now) * Math.min(1, amount * falloff);
+                    case FLATTEN -> (target - now) * Math.min(1, amount * falloff);
+                };
+                if (change == 0) continue;
+                sculpt[i] += (float) change;
+                heights[i] += (float) change;
+                changed = true;
+            }
+        }
+        if (changed) {
+            sculptVersion = SCULPT_CHANGES.incrementAndGet();
+            builtFor = shapeKey(); // the heights are already up to date; only the trees need placing again
+            placeTrees();
+        }
+        return changed;
+    }
+
+    private static double neighbourAverage(float[] h, int n, int ix, int iz) {
+        double total = 0;
+        int count = 0;
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int x = ix + dx, z = iz + dz;
+                if (x < 0 || z < 0 || x > n || z > n) continue;
+                total += h[z * (n + 1) + x];
+                count++;
+            }
+        }
+        return total / count;
+    }
+
+    /** The sculpting stretched to a new detail level (so changing Detail keeps what was sculpted). */
+    private static float[] resample(float[] from, int fromN, int toN) {
+        float[] to = new float[(toN + 1) * (toN + 1)];
+        for (int iz = 0; iz <= toN; iz++) {
+            for (int ix = 0; ix <= toN; ix++) {
+                double gx = (double) ix / toN * fromN, gz = (double) iz / toN * fromN;
+                int x0 = Math.min(fromN - 1, (int) gx), z0 = Math.min(fromN - 1, (int) gz);
+                double fx = gx - x0, fz = gz - z0;
+                double top = from[z0 * (fromN + 1) + x0] * (1 - fx) + from[z0 * (fromN + 1) + x0 + 1] * fx;
+                double bottom = from[(z0 + 1) * (fromN + 1) + x0] * (1 - fx) + from[(z0 + 1) * (fromN + 1) + x0 + 1] * fx;
+                to[iz * (toN + 1) + ix] = (float) (top * (1 - fz) + bottom * fz);
+            }
+        }
+        return to;
     }
 
     /** Heights at the grid's corners ((resolution+1) squared, row by row from -z to +z, -x to +x), above the entity. */
@@ -96,23 +220,40 @@ public final class Terrain extends Component {
         String key = shapeKey();
         if (key.equals(builtFor) && heights != null) return;
         int n = Math.max(2, resolution);
-        heights = new float[(n + 1) * (n + 1)];
-        for (int iz = 0; iz <= n; iz++) {
-            for (int ix = 0; ix <= n; ix++) {
-                double x = ((double) ix / n - 0.5) * size, z = ((double) iz / n - 0.5) * size;
-                heights[iz * (n + 1) + ix] = (float) rawHeight(x, z);
+        if (!baseKey().equals(baseFor) || base == null) {
+            base = new float[(n + 1) * (n + 1)];
+            for (int iz = 0; iz <= n; iz++) {
+                for (int ix = 0; ix <= n; ix++) {
+                    double x = ((double) ix / n - 0.5) * size, z = ((double) iz / n - 0.5) * size;
+                    base[iz * (n + 1) + ix] = (float) rawHeight(x, z);
+                }
             }
+            baseFor = baseKey();
         }
+        if (sculpt != null && sculptDetail != n) {
+            sculpt = resample(sculpt, sculptDetail, n);
+            sculptDetail = n;
+        }
+        heights = base.clone();
+        if (sculpt != null) for (int i = 0; i < heights.length; i++) heights[i] += sculpt[i];
         builtFor = key;
-        treeSpots = List.of(); // place trees on the new land
+        placeTrees();
+    }
+
+    /**
+     * Scatters trees on gentle slopes below the snow. Every try uses the same random numbers
+     * whether or not a tree grows there, so sculpting one spot doesn't move trees everywhere else.
+     */
+    private void placeTrees() {
         List<double[]> spots = new ArrayList<>();
         Random random = new Random(seed * 7919L + 13);
         for (int tries = 0; tries < trees * 6 && spots.size() < trees; tries++) {
             double x = (random.nextDouble() - 0.5) * size * 0.96, z = (random.nextDouble() - 0.5) * size * 0.96;
+            double scale = 0.8 + random.nextDouble() * 0.7;
             if (Math.hypot(x, z) < flatRadius + 3) continue; // keep the start clear
             double h = heightAt(x, z);
             if (Double.isNaN(h) || h / height > 0.68 || h / height < 0.07 || steepness(x, z) > 0.38) continue;
-            spots.add(new double[] {x, z, h, 0.8 + random.nextDouble() * 0.7});
+            spots.add(new double[] {x, z, h, scale});
         }
         treeSpots = List.copyOf(spots);
     }
@@ -195,6 +336,15 @@ public final class Terrain extends Component {
         out.put("grass", Json.color(grass));
         out.put("rock", Json.color(rock));
         out.put("snow", Json.color(snow));
+        synchronized (this) {
+            if (sculpt != null) {
+                // the hand sculpting, as little-endian floats in base64 (a few dozen KB for normal detail)
+                java.nio.ByteBuffer bytes = java.nio.ByteBuffer.allocate(sculpt.length * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                for (float f : sculpt) bytes.putFloat(f);
+                out.put("sculptDetail", (double) sculptDetail);
+                out.put("sculpt", java.util.Base64.getEncoder().encodeToString(bytes.array()));
+            }
+        }
     }
 
     @Override
@@ -210,5 +360,23 @@ public final class Terrain extends Component {
         grass = Json.color(in, "grass", grass);
         rock = Json.color(in, "rock", rock);
         snow = Json.color(in, "snow", snow);
+        synchronized (this) {
+            sculpt = null;
+            String saved = Json.string(in, "sculpt", "");
+            int detail = (int) Json.number(in, "sculptDetail", 0);
+            if (!saved.isEmpty() && detail >= 2) {
+                try {
+                    java.nio.ByteBuffer bytes = java.nio.ByteBuffer.wrap(java.util.Base64.getDecoder().decode(saved)).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    if (bytes.remaining() == (detail + 1) * (detail + 1) * 4) {
+                        sculpt = new float[(detail + 1) * (detail + 1)];
+                        for (int i = 0; i < sculpt.length; i++) sculpt[i] = bytes.getFloat();
+                        sculptDetail = detail;
+                    }
+                } catch (IllegalArgumentException ignored) {
+                    // damaged sculpting: keep the generated land
+                }
+            }
+            sculptVersion = SCULPT_CHANGES.incrementAndGet();
+        }
     }
 }

@@ -69,6 +69,8 @@ public final class EditorApp implements MainMenu.Actions {
     private ExportDialog exportDialog;
     private SettingsPanel settings;
     private SpriteEditorPanel spriteEditor;
+    private AudioPanel audio;
+    private AnimationPanel animation;
 
     /** Opens the editor on a project folder (created if needed), optionally opening a script too. */
     public static void run(Path projectFolder, Path scriptToOpen, TestRun test) throws IOException {
@@ -160,6 +162,9 @@ public final class EditorApp implements MainMenu.Actions {
         exportDialog = new ExportDialog(ctx);
         settings = new SettingsPanel(ctx);
         spriteEditor = new SpriteEditorPanel(ctx);
+        audio = new AudioPanel(ctx);
+        animation = new AnimationPanel(ctx);
+        ctx.animation = animation;
         ctx.spriteEditor = spriteEditor;
         ctx.scripts = scripts;
         ctx.eights = eights;
@@ -266,6 +271,8 @@ public final class EditorApp implements MainMenu.Actions {
         exportDialog.draw();
         settings.draw();
         spriteEditor.draw();
+        audio.draw();
+        animation.draw();
 
         handleShortcuts();
         drawUnsavedDialog();
@@ -318,6 +325,9 @@ public final class EditorApp implements MainMenu.Actions {
             if (test.guide().equals("settings")) openSettings();
             else if (test.guide().equals("window")) ctx.playInWindow();
             else if (test.guide().equals("sprites")) spriteEditor.open(ctx.selected());
+            else if (test.guide().equals("mixer")) audio.open("Mixer");
+            else if (test.guide().equals("soundmaker")) audio.open("Sound Maker");
+            else if (test.guide().equals("animation")) animation.open();
             else if (test.guide().startsWith("graph:")) eights.open(ctx.project.scriptsFolder().resolve(test.guide().substring(6) + ".8s"), 0);
             else openGuide(test.guide());
         }
@@ -378,5 +388,15 @@ public final class EditorApp implements MainMenu.Actions {
     @Override
     public void openSettings() {
         settings.open();
+    }
+
+    @Override
+    public void openAudio(String tab) {
+        audio.open(tab);
+    }
+
+    @Override
+    public void openAnimation() {
+        animation.open();
     }
 }

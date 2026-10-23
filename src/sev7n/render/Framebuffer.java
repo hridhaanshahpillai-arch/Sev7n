@@ -86,9 +86,22 @@ public final class Framebuffer implements AutoCloseable {
         }
     }
 
+    /** The framebuffer being drawn into (null: the window), so drawing elsewhere for a moment can come back to it. */
+    private static Framebuffer bound;
+
     public void bind() {
         glBindFramebuffer(GL_FRAMEBUFFER, msFbo != 0 ? msFbo : fbo);
         glViewport(0, 0, width, height);
+        bound = this;
+    }
+
+    /**
+     * Binds the framebuffer that was being drawn into again (after the shadow map). Remembered
+     * here because asking OpenGL (glGet) makes the CPU wait for the graphics card on some drivers.
+     */
+    static void rebind() {
+        if (bound != null) bound.bind();
+        else glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     /** Finishes drawing: smooths the anti-aliased image into the picture, then unbinds. */
@@ -99,6 +112,7 @@ public final class Framebuffer implements AutoCloseable {
             glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        bound = null;
     }
 
     /** Stretches the finished picture over the whole window (sharp pixels if pixelated). */
@@ -112,6 +126,7 @@ public final class Framebuffer implements AutoCloseable {
 
     public static void unbind() {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        bound = null;
     }
 
     public int texture() {
@@ -128,6 +143,7 @@ public final class Framebuffer implements AutoCloseable {
 
     @Override
     public void close() {
+        if (bound == this) bound = null;
         if (fbo == 0) return;
         glDeleteFramebuffers(fbo);
         glDeleteTextures(colorTexture);

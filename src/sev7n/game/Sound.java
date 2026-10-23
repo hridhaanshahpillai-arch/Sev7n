@@ -1,162 +1,208 @@
 package sev7n.game;
 
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.Clip;
-import javax.sound.sampled.FloatControl;
-import javax.sound.sampled.LineEvent;
-import java.io.ByteArrayInputStream;
-import java.nio.file.Files;
+import sev7n.audio.AudioClip;
+import sev7n.audio.AudioMixer;
+import sev7n.audio.MixerSettings;
+import sev7n.math.Vec3;
+import sev7n.scene.AudioSource;
+import sev7n.scene.Entity;
+import sev7n.scene.Scene;
+
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
+import java.util.IdentityHashMap;
 import java.util.Map;
 
 /**
- * Sound effects and music for a running game, with Java's own audio (no extra libraries):
- * .wav files (also .aiff and .au). Files are read once and kept, so playing the same sound
- * again is quick. Sounds that are still playing stop when the game stops.
+ * Sound for a running game, through Sev7n's audio engine (sev7n.audio.AudioMixer): effects,
+ * music with crossfades, 3D sounds heard from the main camera, Audio Source components, and
+ * the Audio Mixer's volumes (the project's audio.json). Files (.wav or .ogg) are read once and
+ * kept. The engine only starts on the first sound, so silent games never open the sound card.
  */
 final class Sound {
 
-    /** A sound file read into memory. */
-    private record Loaded(AudioFormat format, byte[] data) { }
-
-    private static final int MAX_PLAYING = 24; // more at once than this and the oldest is cut off
-
     private final Path projectFolder;
-    private final Map<String, Loaded> loaded = new HashMap<>();
-    private final List<Clip> playing = new ArrayList<>();
-    private Clip music;
+    private final AudioMixer mixer = new AudioMixer();
+    private final Map<String, AudioClip> loaded = new HashMap<>();
+    private final Map<Entity, AudioMixer.Voice> sources = new IdentityHashMap<>();
+    private boolean started;
+    private AudioMixer.Voice music;
     private String musicPath = "";
-    private double musicVolume = 1;
-    private double masterVolume = 1;
-
-    /** Every sound and the music are multiplied by this (a volume setting). */
-    void setMasterVolume(double volume) {
-        masterVolume = Math.max(0, Math.min(1, volume));
-        if (music != null && music.isOpen()) setVolume(music, musicVolume * masterVolume);
-    }
-
-    double masterVolume() {
-        return masterVolume;
-    }
 
     Sound(Path projectFolder) {
         this.projectFolder = projectFolder;
+        MixerSettings.load(projectFolder.resolve(MixerSettings.FILE_NAME)).applyTo(mixer);
     }
 
-    /** Plays a sound once. 'volume' 1 = as recorded, 0.5 = quieter, 0 = silent. Throws with a readable message if the file can't be played. */
-    void play(String path, double volume) {
-        play(path, volume, 0);
+    AudioMixer mixer() {
+        return mixer;
     }
 
-    /** Plays a sound once, 'pan' -1 (all left) to 1 (all right), 0 in the middle. */
-    void play(String path, double volume, double pan) {
-        if (volume * masterVolume <= 0.001) return; // too far away (or muted) to hear
-        Clip clip = open(path, volume * masterVolume);
-        setPan(clip, pan);
-        clip.addLineListener(event -> {
-            if (event.getType() == LineEvent.Type.STOP) clip.close();
-        });
-        synchronized (playing) {
-            playing.removeIf(c -> !c.isOpen());
-            if (playing.size() >= MAX_PLAYING) playing.remove(0).close();
-            playing.add(clip);
+    private AudioMixer started() {
+        if (!started) {
+            mixer.start();
+            started = true;
         }
-        clip.start();
+        return mixer;
     }
 
-    /** Plays a sound over and over (background music), replacing any music already playing. The same music again keeps going. */
-    void playMusic(String path, double volume) {
-        musicVolume = volume;
-        if (music != null && music.isOpen() && musicPath.equals(path)) {
-            setVolume(music, volume * masterVolume);
+    /** A sound file read into memory (once). Throws IllegalArgumentException with a readable message. */
+    AudioClip clip(String path) {
+        AudioClip clip = loaded.get(path);
+        if (clip == null) {
+            if (path == null || path.isBlank()) throw new IllegalArgumentException("no sound file given");
+            clip = AudioClip.read(projectFolder.resolve(path));
+            loaded.put(path, clip);
+        }
+        return clip;
+    }
+
+    // ---------------------------------------------------------------- effects
+
+    /** Plays a sound once. 'volume' 1 = as recorded, 0.5 = quieter, 0 = silent. */
+    AudioMixer.Voice play(String path, double volume) {
+        return play(path, volume, 1, "Effects");
+    }
+
+    AudioMixer.Voice play(String path, double volume, double pitch, String bus) {
+        AudioClip clip = clip(path);
+        return started().play(clip, bus, volume, pitch, false);
+    }
+
+    /** Plays a sound at a place in the world, heard from the main camera; silent past 'range'. */
+    AudioMixer.Voice playAt(String path, Vec3 at, double volume, double range, double pitch) {
+        AudioClip clip = clip(path);
+        return started().playAt(clip, "Effects", at, range, volume, pitch, false);
+    }
+
+    // ---------------------------------------------------------------- music
+
+    /**
+     * Plays music on repeat through the Music bus. Different music crossfades over 'fade'
+     * seconds (0 = cut straight over); the same music again just changes its volume.
+     */
+    void playMusic(String path, double volume, double fade) {
+        if (music != null && music.playing() && musicPath.equals(path)) {
+            if (fade > 0) music.fade(volume, fade, false);
+            else music.setVolume(volume);
             return;
         }
-        stopMusic();
-        music = open(path, volume * masterVolume);
+        AudioClip clip = clip(path);
+        stopMusic(fade);
+        music = started().play(clip, "Music", fade > 0 ? 0 : volume, 1, true);
+        if (fade > 0) music.fade(volume, fade, false);
         musicPath = path;
-        music.loop(Clip.LOOP_CONTINUOUSLY);
     }
 
-    void stopMusic() {
-        if (music != null) music.close();
+    void stopMusic(double fade) {
+        if (music != null) {
+            if (fade > 0) music.fade(0, fade, true);
+            else music.stop();
+        }
         music = null;
         musicPath = "";
     }
 
-    /** Stops everything (the game ended). */
-    void stopAll() {
-        stopMusic();
-        synchronized (playing) {
-            playing.forEach(Clip::close);
-            playing.clear();
-        }
+    // ---------------------------------------------------------------- volumes
+
+    /** Every sound and the music are multiplied by this (a volume setting). */
+    void setMasterVolume(double volume) {
+        mixer.setMaster(volume);
     }
 
-    private Clip open(String path, double volume) {
-        try {
-            Loaded sound = loaded.computeIfAbsent(path, this::read);
-            Clip clip = AudioSystem.getClip();
-            clip.open(sound.format(), sound.data(), 0, sound.data().length);
-            setVolume(clip, volume);
-            return clip;
-        } catch (IllegalArgumentException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalArgumentException("can't play '" + path + "': " + e.getMessage());
-        }
+    double masterVolume() {
+        return mixer.master();
     }
 
-    private Loaded read(String path) {
-        Path file = projectFolder.resolve(path);
-        if (!Files.isRegularFile(file)) throw new IllegalArgumentException("there's no sound file '" + path + "' in the project");
-        try (AudioInputStream in = AudioSystem.getAudioInputStream(new ByteArrayInputStream(Files.readAllBytes(file)))) {
-            AudioFormat format = in.getFormat();
-            if (format.getEncoding() != AudioFormat.Encoding.PCM_SIGNED && format.getEncoding() != AudioFormat.Encoding.PCM_UNSIGNED) {
-                AudioFormat pcm = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, format.getSampleRate(), 16,
-                        format.getChannels(), format.getChannels() * 2, format.getSampleRate(), false);
-                try (AudioInputStream converted = AudioSystem.getAudioInputStream(pcm, in)) {
-                    return new Loaded(pcm, converted.readAllBytes());
-                }
+    // ---------------------------------------------------------------- Audio Sources
+
+    /** Plays an object's Audio Source (from the start). Throws IllegalArgumentException if its sound can't play. */
+    void playSource(Entity entity) {
+        AudioSource source = entity.get(AudioSource.class);
+        stopSource(entity);
+        AudioClip clip = clip(source.clip);
+        Vec3 p = entity.transform.position;
+        AudioMixer.Voice voice = source.spatial
+                ? started().playAt(clip, source.bus, p, source.range, source.volume, source.pitch, source.loop)
+                : started().play(clip, source.bus, source.volume, source.pitch, source.loop);
+        sources.put(entity, voice);
+        source.voice = voice;
+    }
+
+    void stopSource(Entity entity) {
+        AudioMixer.Voice voice = sources.remove(entity);
+        if (voice != null) voice.stop();
+        AudioSource source = entity.get(AudioSource.class);
+        if (source != null) source.voice = null;
+    }
+
+    boolean sourcePlaying(Entity entity) {
+        AudioMixer.Voice voice = sources.get(entity);
+        return voice != null && voice.playing();
+    }
+
+    /**
+     * Every frame: the ears follow the main camera, Audio Sources follow their objects (and pick up
+     * changes to their settings), and sources of objects that are gone stop. Hidden objects are paused.
+     */
+    void update(Scene scene) {
+        Entity camera = scene.mainCamera(); // set even before the first sound, so it's heard from the right place
+        if (camera != null) mixer.setListener(camera.transform.position, camera.transform.right(), camera.transform.forward());
+        if (!started) return;
+        sources.entrySet().removeIf(entry -> {
+            Entity entity = entry.getKey();
+            AudioMixer.Voice voice = entry.getValue();
+            AudioSource source = entity.get(AudioSource.class);
+            if (!scene.contains(entity) || source == null || !voice.playing()) {
+                voice.stop();
+                if (source != null) source.voice = null;
+                return true;
             }
-            return new Loaded(format, in.readAllBytes());
-        } catch (Exception e) {
-            throw new IllegalArgumentException("can't read the sound '" + path + "' (use .wav files): " + e.getMessage());
-        }
+            Vec3 p = entity.transform.position;
+            voice.setPosition(p.x, p.y, p.z);
+            voice.setVolume(source.volume);
+            voice.setPitch(source.pitch);
+            voice.setLoop(source.loop);
+            voice.setRange(source.range);
+            voice.setPaused(!entity.active);
+            return false;
+        });
     }
 
-    /** Left / right: mono sounds have a pan control, stereo ones a balance control (some sound cards have neither). */
-    private static void setPan(Clip clip, double pan) {
-        if (pan == 0) return;
-        FloatControl.Type type = clip.isControlSupported(FloatControl.Type.PAN) ? FloatControl.Type.PAN
-                : clip.isControlSupported(FloatControl.Type.BALANCE) ? FloatControl.Type.BALANCE : null;
-        if (type == null) return;
-        FloatControl control = (FloatControl) clip.getControl(type);
-        control.setValue((float) Math.max(control.getMinimum(), Math.min(control.getMaximum(), pan)));
+    /**
+     * Another scene is taking over: its sounds stop, but the music keeps playing into the new
+     * scene (and the volumes stay), so music doesn't restart at every door.
+     */
+    Sound handOver() {
+        sources.values().forEach(AudioMixer.Voice::stop);
+        sources.clear();
+        AudioMixer.Voice keep = music;
+        if (started) {
+            for (AudioMixer.Voice v : mixer.voices()) if (v != keep) v.stop();
+        }
+        return this;
+    }
+
+    /** Stops everything (the game ended) and lets go of the sound card. */
+    void stopAll() {
+        sources.clear();
+        music = null;
+        musicPath = "";
+        mixer.close();
+        started = false;
     }
 
     /**
      * How loud and where (left/right) a sound at 'source' is for a listener at 'ear' facing with
      * 'right' to its right: full volume up close, fading to nothing at 'range'.
      */
-    static double[] placed(sev7n.math.Vec3 source, sev7n.math.Vec3 ear, sev7n.math.Vec3 right, double range) {
-        sev7n.math.Vec3 toSound = source.minus(ear);
+    static double[] placed(Vec3 source, Vec3 ear, Vec3 right, double range) {
+        Vec3 toSound = source.minus(ear);
         double distance = toSound.length();
         double near = Math.min(2, range * 0.1); // inside this it's full volume
         double fade = distance <= near ? 1 : Math.max(0, 1 - (distance - near) / Math.max(0.001, range - near));
         double volume = fade * fade; // falls off quickly, then trails away, like real sound
         double pan = distance < 0.001 ? 0 : Math.max(-1, Math.min(1, toSound.times(1 / distance).dot(right))) * Math.min(1, distance / near) * 0.8;
         return new double[] {volume, pan};
-    }
-
-    private static void setVolume(Clip clip, double volume) {
-        if (!clip.isControlSupported(FloatControl.Type.MASTER_GAIN)) return;
-        FloatControl gain = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
-        double decibels = volume <= 0.0001 ? gain.getMinimum() : 20 * Math.log10(volume);
-        gain.setValue((float) Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), decibels)));
     }
 }

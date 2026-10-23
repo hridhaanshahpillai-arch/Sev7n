@@ -3,16 +3,16 @@
 A 2D and 3D game engine written in Java, with a Unity-style editor, its own scripting language
 (**Seven**) and a visual scripting system (**Eights**).
 
-> **Status: 0.7.6 alpha "Refined".** Expect things to change.
+> **Status: 1.0 "Together".** Sev7n is complete: a full engine from 2D to multiplayer.
 
 **Download** from the **Releases** page:
 
 | Your computer | Download | Then |
 |---|---|---|
-| Windows | `Sev7n-0.7.6-alpha-windows.zip` | double-click **Sev7n.exe** |
-| Mac with Apple chip (M1, M2, M3...) | `Sev7n-0.7.6-alpha-mac-apple-silicon.zip` | double-click **Sev7n.command** (the first time: right-click it > Open, because it isn't signed) |
-| Mac with Intel chip | `Sev7n-0.7.6-alpha-mac-intel.zip` | the same |
-| Linux | `Sev7n-0.7.6-alpha-linux.zip` (or `-linux-arm64`) | run `./sev7n.sh` |
+| Windows | `Sev7n-1.0-windows.zip` | double-click **Sev7n.exe** |
+| Mac with Apple chip (M1, M2, M3...) | `Sev7n-1.0-mac-apple-silicon.zip` | double-click **Sev7n.command** (the first time: right-click it > Open, because it isn't signed) |
+| Mac with Intel chip | `Sev7n-1.0-mac-intel.zip` | the same |
+| Linux | `Sev7n-1.0-linux.zip` (or `-linux-arm64`) | run `./sev7n.sh` |
 
 **Nothing else to install:** every download comes with **Java 21** inside (Eclipse Temurin, GPL with the
 Classpath Exception). On a Mac or Linux it unpacks itself the first time Sev7n starts.
@@ -39,6 +39,15 @@ behaviour PlayerMove {
     }
 }
 ```
+
+## What's in 1.0 "Together"
+
+- **Multiplayer you can test alone**: `connect()` hosts, or joins the game already running on your PC, so two windows (Play + File > Play in Window) play together. Shared values, messages, players joining and leaving. Try the **Multiplayer** project in the Hub. See [Multiplayer](docs/MULTIPLAYER.md)
+- **Sky**: a gradient sky with the sun, sunsets and nights that follow the Light, and presets (Day, Sunset, Night, Overcast, Alien)
+- **Third Person Camera** component: follows and orbits a character, comes in front of walls; `cameraForward()` / `cameraRight()`. See [Cameras and Controls](docs/CONTROLS.md)
+- **Gamepads**: `padButton`, `padPressed`, `padAxis` (Xbox, PlayStation, Switch Pro...)
+- Also since 0.7.6: shadows, terrain sculpting, the audio engine (mixer, 3D sound, Sound Maker) and the Animation window
+- Eights has nodes for all of it
 
 ## What's in 0.7.6 "Refined"
 

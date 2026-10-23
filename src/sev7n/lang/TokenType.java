@@ -12,6 +12,8 @@ public enum TokenType {
     LESS, LESS_EQUAL, GREATER, GREATER_EQUAL,
     PLUS_EQUAL, MINUS_EQUAL, STAR_EQUAL, SLASH_EQUAL, PERCENT_EQUAL,
     DOT_DOT, QUESTION_QUESTION,
+    // C-style extras: i++ i--, and cout << x and std::cout
+    PLUS_PLUS, MINUS_MINUS, LESS_LESS, COLON_COLON,
 
     // Literals ('FORMAT' is f"text with {expressions}", its literal the raw text between the quotes)
     IDENTIFIER, STRING, NUMBER, COLOR, FORMAT,

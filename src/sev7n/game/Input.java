@@ -141,10 +141,82 @@ public final class Input {
         return rightClicked;
     }
 
+    // ---- gamepad (the first one plugged in; Xbox names: A B X Y, LB RB, BACK START, LS RS, UP DOWN LEFT RIGHT) ----
+
+    private static final String[] PAD_BUTTONS = {"A", "B", "X", "Y", "LB", "RB", "BACK", "START", "GUIDE", "LS", "RS", "UP", "RIGHT", "DOWN", "LEFT"};
+    private static final String[] PAD_AXES = {"LX", "LY", "RX", "RY", "LT", "RT"};
+    private final Set<String> padHeld = new HashSet<>();
+    private final Set<String> padPressed = new HashSet<>();
+    private final Map<String, Double> padAxes = new HashMap<>();
+    private boolean padConnected;
+    private boolean padUnavailable; // no GLFW here (tests, headless): stop asking
+
+    /** Reads the gamepad. The window calls this once per frame, before the game updates. */
+    public void pollGamepad() {
+        if (padUnavailable) return;
+        try {
+            int pad = -1;
+            for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST && pad < 0; j++) if (glfwJoystickIsGamepad(j)) pad = j;
+            padConnected = pad >= 0;
+            if (!padConnected) {
+                padHeld.clear();
+                padAxes.clear();
+                return;
+            }
+            try (org.lwjgl.glfw.GLFWGamepadState state = org.lwjgl.glfw.GLFWGamepadState.malloc()) {
+                if (!glfwGetGamepadState(pad, state)) return;
+                for (int b = 0; b < PAD_BUTTONS.length; b++) {
+                    boolean down = state.buttons(b) == GLFW_PRESS;
+                    if (down && padHeld.add(PAD_BUTTONS[b])) padPressed.add(PAD_BUTTONS[b]);
+                    if (!down) padHeld.remove(PAD_BUTTONS[b]);
+                }
+                for (int a = 0; a < PAD_AXES.length; a++) {
+                    double v = state.axes(a);
+                    if (a >= 4) v = (v + 1) / 2;                   // triggers: 0 (let go) .. 1 (pulled all the way)
+                    else if (Math.abs(v) < 0.15) v = 0;            // sticks: a little dead zone in the middle
+                    padAxes.put(PAD_AXES[a], v);
+                }
+            }
+        } catch (Throwable notHere) {
+            padUnavailable = true;
+        }
+    }
+
+    public boolean padConnected() {
+        return padConnected;
+    }
+
+    public boolean padHeld(String button) {
+        return padHeld.contains(button.toUpperCase());
+    }
+
+    public boolean padPressed(String button) {
+        return padPressed.contains(button.toUpperCase());
+    }
+
+    /** A stick (LX, LY, RX, RY: -1..1, down is +1 on Y) or trigger (LT, RT: 0..1). */
+    public double padAxis(String axis) {
+        return padAxes.getOrDefault(axis.toUpperCase(), 0.0);
+    }
+
+    /** For tests: pretend a gamepad button is down / up, or a stick is pushed. */
+    public void setPadButton(String button, boolean down) {
+        padConnected = true;
+        String name = button.toUpperCase();
+        if (down && padHeld.add(name)) padPressed.add(name);
+        if (!down) padHeld.remove(name);
+    }
+
+    public void setPadAxis(String axis, double value) {
+        padConnected = true;
+        padAxes.put(axis.toUpperCase(), value);
+    }
+
     /** Clears the one-frame states. Called after each game update. */
     public void endFrame() {
         pressed.clear();
         released.clear();
+        padPressed.clear();
         mouseClicked = false;
         rightClicked = false;
         moveX = 0;

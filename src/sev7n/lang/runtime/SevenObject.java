@@ -17,12 +17,19 @@ public interface SevenObject {
     Object getProperty(String name, int line);
 
     default void setProperty(String name, Object value, int line) {
-        throw new SevenError("'" + name + "' on a " + typeName() + " can't be changed", line);
+        throw cantChange("'" + name + "' on a " + typeName(), name, line);
     }
 
     /** The names scripts can use after the dot, for "did you mean ...?" (empty if unknown). */
     default java.util.Collection<String> propertyNames() {
         return java.util.List.of();
+    }
+
+    /** For setters: a property that can be read but not changed, or (with a suggestion) one that doesn't exist. */
+    default SevenError cantChange(String what, String name, int line) {
+        if (propertyNames().isEmpty() || propertyNames().contains(name)) return new SevenError(what + " can't be changed", line);
+        String hint = sev7n.lang.Suggestions.closest(name, propertyNames());
+        return new SevenError(what + " doesn't exist" + (hint == null ? "" : ". Did you mean '" + hint + "'?"), line);
     }
 
     default SevenError noSuchProperty(String name, int line) {

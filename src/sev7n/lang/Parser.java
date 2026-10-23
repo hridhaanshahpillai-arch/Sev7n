@@ -20,6 +20,24 @@ public class Parser {
     private final List<Token> tokens;
     private int current = 0;
 
+    /*
+     * C-style Seven: code written the C# / C++ way works too.
+     *   int score = 0;   float speed = 2.5f;   string name = "Pip";   (the type is just a label)
+     *   void jump() { }   int add(int a, int b) { return a + b; }
+     *   for (int i = 0; i < 10; i++) { }   foreach (var e in enemies) { }   for (auto e : enemies) { }
+     *   i++  ++i  i--   if (x) y = 1;  (no braces after a condition in brackets)
+     *   Console.WriteLine(x)  Debug.Log(x)  std::cout << x << std::endl;   null / nullptr
+     *   using System;  using namespace std;  #include <cmath>   (skipped)
+     *   int main() { }   (called at the end, like a C++ program)
+     */
+    private static final java.util.Set<String> TYPES = java.util.Set.of(
+            "int", "float", "double", "string", "String", "bool", "boolean", "char", "long", "short", "byte",
+            "uint", "decimal", "object", "auto", "void", "Vector3", "Vector2");
+    private static final java.util.Set<String> MODIFIERS = java.util.Set.of(
+            "public", "private", "protected", "internal", "static", "const", "readonly", "override", "virtual",
+            "unsigned", "signed", "final", "inline");
+    private boolean cMain = false;
+
     public Parser(List<Token> tokens) {
         this.tokens = tokens;
     }
@@ -33,34 +51,104 @@ public class Parser {
         } catch (SevenError e) {
             throw e.inFile(peek().file());
         }
+        if (cMain) {
+            // int main() { ... } runs once everything is defined, like a C or C++ program
+            Token main = new Token(IDENTIFIER, "main", null, peek().line(), peek().file());
+            statements.add(new Stmt.Expression(new Expr.Call(new Expr.Variable(main), main, List.of())));
+        }
         return statements;
     }
 
     // ---------------------------------------------------------------- declarations
+
+    /** Where a C-style typed name starts ('int x', 'static float speed', 'std::string s', 'int[] list'): the name's index, or -1. */
+    private int typedNameAt(int i) {
+        while (i < tokens.size() && tokens.get(i).type() == IDENTIFIER && MODIFIERS.contains(tokens.get(i).text())) i++;
+        if (i + 2 < tokens.size() && tokens.get(i).text().equals("std") && tokens.get(i + 1).type() == COLON_COLON) i += 2;
+        if (i >= tokens.size() || tokens.get(i).type() != IDENTIFIER || !TYPES.contains(tokens.get(i).text())) return -1;
+        i++;
+        while (i + 1 < tokens.size() && tokens.get(i).type() == LEFT_BRACKET && tokens.get(i + 1).type() == RIGHT_BRACKET) i += 2;
+        while (i < tokens.size() && tokens.get(i).type() == STAR) i++;   // C++ pointers: int* p
+        return i < tokens.size() && tokens.get(i).type() == IDENTIFIER ? i : -1;
+    }
 
     private Stmt declaration() {
         if (check(FUNC) && checkNext(IDENTIFIER)) {
             advance();
             return funcDeclaration();
         }
+        // using System;  using namespace std;  (nothing to do in Seven)
+        if (check(IDENTIFIER) && peek().text().equals("using") && checkNext(IDENTIFIER)) {
+            while (!check(SEMICOLON) && !isAtEnd()) advance();
+            match(SEMICOLON);
+            return new Stmt.Block(List.of());
+        }
+        // public class PlayerMove : MonoBehaviour { ... }  is a behaviour
+        int c = current;
+        while (c < tokens.size() && tokens.get(c).type() == IDENTIFIER && MODIFIERS.contains(tokens.get(c).text())) c++;
+        if (c + 1 < tokens.size() && tokens.get(c).text().equals("class") && tokens.get(c + 1).type() == IDENTIFIER) {
+            current = c + 1;
+            return behaviourDeclaration();
+        }
+        int typed = typedNameAt(current);
+        if (typed >= 0) return typedDeclaration(typed, false);
         if (match(VAR)) return varDeclaration();
         if (match(STYLE)) return styleDeclaration();
         if (match(BEHAVIOUR)) return behaviourDeclaration();
         return statement();
     }
 
+    /** int x = 1;  or  void jump() { }, the type already skipped to the name at 'typed'. In a class, Update() is update(). */
+    private Stmt typedDeclaration(int typed, boolean inClass) {
+        current = typed;
+        if (checkNext(LEFT_PAREN)) {
+            // void jump() { }  int add(int a, int b) { }
+            Token name = advance();
+            advance();
+            if (name.text().equals("main") && !inClass) cMain = true;
+            if (inClass && List.of("Start", "Update", "LateUpdate", "FixedUpdate").contains(name.text())) {
+                String lower = Character.toLowerCase(name.text().charAt(0)) + name.text().substring(1);
+                name = new Token(IDENTIFIER, lower, null, name.line(), name.file());
+            }
+            return functionRest(name);
+        }
+        String type = tokens.get(typed - 1).text();
+        Stmt.Var v = varDeclaration();
+        if (v.initializer() == null) {
+            // int x;  starts at 0, like C#: numbers 0, strings "", bools false
+            Object start = switch (type) {
+                case "string", "String" -> "";
+                case "bool", "boolean" -> false;
+                case "int", "float", "double", "long", "short", "byte", "uint", "decimal" -> 0.0;
+                default -> null;
+            };
+            if (start != null) return new Stmt.Var(v.name(), new Expr.Literal(start), String.valueOf(start));
+        }
+        return v;
+    }
+
     /**
      * behaviour Name { var ... func ... }
      * A template for scripts you attach to objects. Only fields and functions go inside.
+     * (Also C# style: class Name : MonoBehaviour { public float speed = 5; void Update() { } })
      */
     private Stmt behaviourDeclaration() {
         Token name = consume(IDENTIFIER, "Expected a behaviour name after 'behaviour'");
+        if (match(COLON)) {
+            do consume(IDENTIFIER, "Expected a name after ':'"); while (match(COMMA));
+        }
         consume(LEFT_BRACE, "Expected '{' after the behaviour name");
         List<Stmt.Var> fields = new ArrayList<>();
         List<Stmt.Func> methods = new ArrayList<>();
         while (!check(RIGHT_BRACE) && !isAtEnd()) {
+            int typed = typedNameAt(current);
             if (match(VAR)) fields.add(varDeclaration());
             else if (match(FUNC)) methods.add(funcDeclaration());
+            else if (typed >= 0) {
+                Stmt member = typedDeclaration(typed, true);
+                if (member instanceof Stmt.Func f) methods.add(f);
+                else fields.add((Stmt.Var) member);
+            }
             else throw new SevenError("Only 'var' and 'func' can go directly inside a behaviour", peek().line());
         }
         consume(RIGHT_BRACE, "Expected '}' to close the behaviour");
@@ -79,6 +167,8 @@ public class Parser {
         List<Expr> defaults = new ArrayList<>();
         if (!check(RIGHT_PAREN)) {
             do {
+                int typed = typedNameAt(current);
+                if (typed >= 0) current = typed;   // (int a, float b): the types are just labels
                 Token param = consume(IDENTIFIER, "Expected a parameter name");
                 Expr fallback = match(EQUAL) ? expression() : null;
                 if (fallback == null && !defaults.isEmpty() && defaults.get(defaults.size() - 1) != null) {
@@ -133,7 +223,50 @@ public class Parser {
         if (match(BREAK)) return endWithOptionalSemicolon(new Stmt.Break(previous()));
         if (match(CONTINUE)) return endWithOptionalSemicolon(new Stmt.Continue(previous()));
         if (match(LEFT_BRACE)) return new Stmt.Block(block());
+        if (check(IDENTIFIER) && peek().text().equals("foreach") && checkNext(LEFT_PAREN)) {
+            advance();
+            advance();
+            return forInBrackets();
+        }
+        if (check(IDENTIFIER) && (peek().text().equals("cout") || peek().text().equals("std") && checkNext(COLON_COLON))) {
+            Stmt out = coutStatement();
+            if (out != null) return out;
+        }
         return endWithOptionalSemicolon(new Stmt.Expression(expression()));
+    }
+
+    /** std::cout << "Score: " << score << std::endl;  prints the pieces joined together */
+    private Stmt coutStatement() {
+        int start = current;
+        if (match(IDENTIFIER) && previous().text().equals("std")) {
+            consume(COLON_COLON, "Expected '::'");
+            if (!check(IDENTIFIER) || !peek().text().equals("cout")) {
+                current = start;
+                return null;
+            }
+            advance();
+        }
+        Token cout = previous();
+        if (!check(LESS_LESS)) {
+            current = start;
+            return null;
+        }
+        List<Object> parts = new ArrayList<>();
+        while (match(LESS_LESS)) {
+            if (check(IDENTIFIER) && peek().text().equals("std") && checkNext(COLON_COLON)) {
+                advance();
+                advance();
+            }
+            if (check(IDENTIFIER) && peek().text().equals("endl")) {
+                advance();   // print() starts a new line anyway
+                continue;
+            }
+            parts.add(term());
+        }
+        if (parts.isEmpty()) parts.add("");
+        Token print = new Token(IDENTIFIER, "print", null, cout.line(), cout.file());
+        Expr text = new Expr.Format(cout, parts);
+        return endWithOptionalSemicolon(new Stmt.Expression(new Expr.Call(new Expr.Variable(print), cout, List.of(text))));
     }
 
     private Stmt ifStatement() {
@@ -141,20 +274,52 @@ public class Parser {
         Stmt thenBranch = blockStatement("if");
         Stmt elseBranch = null;
         if (match(ELSE)) {
-            elseBranch = match(IF) ? ifStatement() : blockStatement("else");
+            elseBranch = match(IF) ? ifStatement() : check(LEFT_BRACE) ? blockStatement("else") : new Stmt.Block(List.of(statement()));
         }
         return new Stmt.If(condition, thenBranch, elseBranch);
     }
 
     private Stmt whileStatement() {
         Expr condition = expression();
-        return new Stmt.While(condition, blockStatement("while"));
+        return new Stmt.While(condition, blockStatement("while"), null);
     }
 
     private Stmt forStatement() {
+        if (match(LEFT_PAREN)) {
+            // C-style: for (int i = 0; i < 10; i++) { }   or a loop over things in brackets: for (auto e : enemies)
+            int depth = 1;
+            boolean semicolon = false;
+            for (int i = current; i < tokens.size() && depth > 0; i++) {
+                TokenType t = tokens.get(i).type();
+                if (t == LEFT_PAREN) depth++;
+                else if (t == RIGHT_PAREN) depth--;
+                else if (t == SEMICOLON && depth == 1) semicolon = true;
+                else if (t == EOF) break;
+            }
+            if (!semicolon) return forInBrackets();
+            Stmt init = match(SEMICOLON) ? null : declaration();
+            Expr condition = check(SEMICOLON) ? new Expr.Literal(true) : expression();
+            consume(SEMICOLON, "Expected ';' after the loop's condition, like for (int i = 0; i < 10; i++)");
+            Expr step = check(RIGHT_PAREN) ? null : expression();
+            consume(RIGHT_PAREN, "Expected ')' to close the for loop's brackets");
+            Stmt loop = new Stmt.While(condition, blockStatement("for"), step);
+            return new Stmt.Block(init == null ? List.of(loop) : List.of(init, loop));
+        }
         Token variable = consume(IDENTIFIER, "Expected a loop variable, like 'for i in 0..10'");
         consume(IN, "Expected 'in' after the loop variable");
         Expr iterable = expression();
+        return new Stmt.For(variable, iterable, blockStatement("for"));
+    }
+
+    /** After 'for (' or 'foreach (': [type or var] name, then 'in' or ':', the list, ')' and the body. */
+    private Stmt forInBrackets() {
+        int typed = typedNameAt(current);
+        if (typed >= 0) current = typed;
+        else match(VAR);
+        Token variable = consume(IDENTIFIER, "Expected a loop variable, like foreach (var e in enemies)");
+        if (!match(IN)) consume(COLON, "Expected 'in' or ':' after the loop variable");
+        Expr iterable = expression();
+        consume(RIGHT_PAREN, "Expected ')' after the list to loop over");
         return new Stmt.For(variable, iterable, blockStatement("for"));
     }
 
@@ -168,6 +333,8 @@ public class Parser {
     }
 
     private Stmt blockStatement(String after) {
+        // C style: if (x) y = 1;  one statement with no braces, after a condition in brackets
+        if (!check(LEFT_BRACE) && previous().type() == RIGHT_PAREN) return new Stmt.Block(List.of(statement()));
         consume(LEFT_BRACE, "Expected '{' after " + after);
         return new Stmt.Block(block());
     }
@@ -203,14 +370,25 @@ public class Parser {
                 // x += 1  becomes  x = x + 1
                 value = new Expr.Binary(target, compoundToBinary(operator), value);
             }
-            return switch (target) {
-                case Expr.Variable v -> new Expr.Assign(v.name(), value);
-                case Expr.Get g -> new Expr.Set(g.object(), g.name(), value);
-                case Expr.Index i -> new Expr.IndexSet(i.object(), i.bracket(), i.index(), value);
-                default -> throw new SevenError("You can only assign to a variable, property or list item", operator.line());
-            };
+            return assignTo(target, value, operator);
         }
         return target;
+    }
+
+    private Expr assignTo(Expr target, Expr value, Token operator) {
+        return switch (target) {
+            case Expr.Variable v -> new Expr.Assign(v.name(), value);
+            case Expr.Get g -> new Expr.Set(g.object(), g.name(), value);
+            case Expr.Index i -> new Expr.IndexSet(i.object(), i.bracket(), i.index(), value);
+            default -> throw new SevenError("You can only assign to a variable, property or list item", operator.line());
+        };
+    }
+
+    /** i++ and ++i (and --): i = i + 1. Either way the result is the new value. */
+    private Expr increment(Expr target, Token op) {
+        boolean up = op.type() == PLUS_PLUS;
+        Token sign = new Token(up ? PLUS : MINUS, up ? "+" : "-", null, op.line(), op.file());
+        return assignTo(target, new Expr.Binary(target, sign, new Expr.Literal(1.0)), op);
     }
 
     private Token compoundToBinary(Token op) {
@@ -318,6 +496,10 @@ public class Parser {
             Token operator = previous();
             return new Expr.Unary(operator, unary());
         }
+        if (match(PLUS_PLUS, MINUS_MINUS)) {
+            Token operator = previous();
+            return increment(unary(), operator);
+        }
         return call();
     }
 
@@ -326,8 +508,18 @@ public class Parser {
         while (true) {
             if (match(LEFT_PAREN)) {
                 expr = finishCall(expr);
+            } else if (match(PLUS_PLUS, MINUS_MINUS)) {
+                expr = increment(expr, previous());
             } else if (match(DOT)) {
-                expr = new Expr.Get(expr, propertyName());
+                Token name = propertyName();
+                // Console.WriteLine(x), Console.Write(x), Debug.Log(x): Seven's print
+                if (expr instanceof Expr.Variable v && check(LEFT_PAREN)
+                        && (v.name().text().equals("Console") && (name.text().equals("WriteLine") || name.text().equals("Write"))
+                        || v.name().text().equals("Debug") && name.text().equals("Log"))) {
+                    expr = new Expr.Variable(new Token(IDENTIFIER, "print", null, name.line(), name.file()));
+                    continue;
+                }
+                expr = new Expr.Get(expr, name);
             } else if (match(LEFT_BRACKET)) {
                 Token bracket = previous();
                 Expr index = expression();
@@ -355,7 +547,12 @@ public class Parser {
         if (match(FALSE)) return new Expr.Literal(false);
         if (match(NONE)) return new Expr.Literal(null);
         if (match(NUMBER, STRING, COLOR)) return new Expr.Literal(previous().literal());
-        if (match(IDENTIFIER)) return new Expr.Variable(previous());
+        if (match(IDENTIFIER)) {
+            String word = previous().text();
+            if (word.equals("null") || word.equals("nullptr")) return new Expr.Literal(null);   // C# / C++ for none
+            if (word.equals("new") && check(IDENTIFIER)) return primary();                     // new Thing(...) is Thing(...)
+            return new Expr.Variable(previous());
+        }
         if (match(FORMAT)) return format(previous());
 
         // func(x) { ... }: a function as a value (for callbacks, filter(), sort()...)

@@ -1,4 +1,4 @@
-# HUD, Menus and Sound (v0.7.5 alpha)
+# HUD, Menus and Sound (v0.7.6 alpha)
 
 ## On-screen text and HUD
 
@@ -175,9 +175,10 @@ stopMusic()
 setVolume(0.5)                                // every sound and the music at half volume
 ```
 
-Sound files are **.wav** (also .aiff and .au). Import them like any other file, or put them in
-your project's `assets/sounds` folder. Up to 24 sounds play at once. Everything stops when the
-game stops.
+Sound files are **.wav** or **.ogg**. Import them like any other file, or put them in your
+project's `assets/sounds` folder. Everything stops when the game stops. There's much more (3D sound,
+Audio Sources, the Audio Mixer, crossfading music, the Sound Maker) in the
+[Sound and Music](AUDIO.md) guide.
 
 ### Sounds in the world
 

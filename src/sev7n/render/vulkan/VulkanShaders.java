@@ -20,7 +20,10 @@ final class VulkanShaders {
     /** Bytes of the per-draw push constants: mat4 model, vec4 color, vec4 uvRect, vec4 params. */
     static final int PUSH_SIZE = 112;
     /** Bytes of the Frame uniform buffer (std140). */
-    static final int FRAME_SIZE = 208;
+    static final int FRAME_SIZE = 288;
+    /** Where the shadow matrix and settings sit in the Frame buffer (beginShadows writes the matrix early). */
+    static final int SHADOW_MATRIX_OFFSET = 208;
+    static final int SHADOW_OFFSET = 272;
 
     private static final String COMMON = """
             #version 450
@@ -32,6 +35,8 @@ final class VulkanShaders {
                 vec4 lightColor;      // w: ambient light
                 vec4 fogColor;
                 vec4 finish;          // x: fog start, y: fog end (off when start >= end), z: brightness, w: shading
+                mat4 shadowMatrix;    // world to the light's view (OpenGL clip space, like view and projection)
+                vec4 shadow;          // x: strength (0 = no shadows), y: world size of a shadow map pixel
             } frame;
             layout(push_constant) uniform Draw {
                 mat4 model;
@@ -78,11 +83,29 @@ final class VulkanShaders {
             """;
 
     static final String LIT_FRAGMENT = COMMON + FINISH + """
+            layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
             layout(set = 1, binding = 0) uniform sampler2D uTexture;
             layout(location = 0) in vec3 vWorldPosition;
             layout(location = 1) in vec3 vNormal;
             layout(location = 2) in vec2 vUV;
             layout(location = 0) out vec4 fragColor;
+
+            // how much sunlight reaches this point: 1 = all, less in shadow (like Shaders.LIT_FRAGMENT)
+            float sunlight(vec3 position, vec3 normal) {
+                if (frame.shadow.x <= 0.0) return 1.0;
+                vec4 p = frame.shadowMatrix * vec4(position + normal * frame.shadow.y * 1.5, 1.0);
+                vec3 ndc = p.xyz / p.w;
+                vec3 at = vec3(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, ndc.z * 0.5 + 0.5); // the map was drawn with y flipped
+                float edge = max(abs(at.x - 0.5), abs(at.y - 0.5)) * 2.0;
+                if (edge >= 1.0 || at.z >= 1.0) return 1.0;
+                vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+                float lit = 0.0;
+                for (int x = -1; x <= 1; x++)
+                    for (int y = -1; y <= 1; y++)
+                        lit += texture(uShadowMap, vec3(at.xy + vec2(x, y) * texel, at.z - 0.0004));
+                float shadow = (1.0 - lit / 9.0) * frame.shadow.x;
+                return 1.0 - shadow * (1.0 - smoothstep(0.8, 1.0, edge));
+            }
 
             void main() {
                 vec4 texel = draw.params.x > 0.5 ? texture(uTexture, vUV) : vec4(1.0);
@@ -100,9 +123,10 @@ final class VulkanShaders {
                 if (dot(normal, toEye) < 0.0) normal = -normal;
 
                 vec3 toLight = normalize(-frame.lightDirection.xyz);
-                float diffuse = max(dot(normal, toLight), 0.0);
+                float sun = sunlight(vWorldPosition, normal);
+                float diffuse = max(dot(normal, toLight), 0.0) * sun;
                 vec3 halfway = normalize(toLight + toEye);
-                float highlight = pow(max(dot(normal, halfway), 0.0), 48.0) * 0.25;
+                float highlight = pow(max(dot(normal, halfway), 0.0), 48.0) * 0.25 * sun;
                 if (shading == 2) {
                     diffuse = floor(diffuse * 3.0 + 0.5) / 3.0;
                     highlight = highlight > 0.12 ? 0.35 : 0.0;
@@ -110,6 +134,27 @@ final class VulkanShaders {
 
                 vec3 color = base * (frame.lightColor.w + diffuse * frame.lightColor.rgb) + highlight * frame.lightColor.rgb;
                 fragColor = vec4(finish(color, vWorldPosition), 1.0);
+            }
+            """;
+
+    /** The shadow map: only depth, as the light sees the scene. */
+    static final String SHADOW_VERTEX = COMMON + TO_VULKAN + """
+            layout(location = 0) in vec3 aPosition;
+            layout(location = 2) in vec2 aUV;
+            layout(location = 0) out vec2 vUV;
+
+            void main() {
+                vUV = aUV;
+                gl_Position = toVulkan(frame.shadowMatrix * draw.model * vec4(aPosition, 1.0));
+            }
+            """;
+
+    static final String SHADOW_FRAGMENT = COMMON + """
+            layout(set = 1, binding = 0) uniform sampler2D uTexture;
+            layout(location = 0) in vec2 vUV;
+
+            void main() {
+                if (draw.params.x > 0.5 && texture(uTexture, vUV).a < 0.5) discard;  // light passes through cut-outs
             }
             """;
 

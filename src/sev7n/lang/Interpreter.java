@@ -222,6 +222,7 @@ public class Interpreter {
                     } catch (Signals.Continue c) {
                         // next iteration
                     }
+                    if (s.step() != null) evaluate(s.step());
                 }
             }
             case Stmt.For s -> executeFor(s);

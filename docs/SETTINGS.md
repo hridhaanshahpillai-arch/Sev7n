@@ -1,4 +1,4 @@
-# Settings (v0.5 alpha)
+# Settings (v0.8 alpha)
 
 Click the purple **7** in the menu bar (or **Window → Settings...**, or **Ctrl+,**).
 Everything applies straight away.
@@ -18,7 +18,36 @@ and fog too.
 | **Anti-aliasing** | Smooths jagged edges: Off, 2x, 4x or 8x |
 | **Pixel textures** | Every picture and texture keeps sharp pixels instead of being smoothed |
 | **Brightness** | Moody, Normal or Bright |
+| **Shadows** | Shadows from the Directional Light: **Off**, **Low** (soft, fast), **Medium** (the default), **High** (crisp) |
+| **Shadow distance** | How far from the camera shadows are drawn. Shorter is sharper; past it they fade out |
 | **Fog** + **Render distance** | Far things fade into the camera's background color; the distance is how far you can see |
+
+## Shadows
+
+The scene's **Directional Light** (the Sun) casts shadows from every Mesh Renderer, terrain and
+tree, in the Scene view, the Game view and the game window. Shadows follow the camera: everything
+within the **Shadow distance** gets them, and they fade out gently past it.
+
+| Where | Setting | What it does |
+|-------|---------|--------------|
+| Settings | **Shadows** | How sharp: Off, Low, Medium or High (High looks best, Low is fastest) |
+| Settings | **Shadow distance** | 60 by default. A small level looks sharper at 30; a big open world may want 120 |
+| Directional Light | **Shadows** | Turn this light's shadows off |
+| Directional Light | **Strength** (under Shadows) | How dark shadows are: 0 = invisible, 1 = only the Ambient light gets in |
+| Mesh Renderer | **Cast shadows** | Turn off for glass, ghosts, or far scenery that doesn't need them |
+
+Textured models with see-through parts (leaves, fences) let light through those parts.
+**Flat** and **Wireframe** shading have no lighting, so no shadows; **Toon** gets hard-edged ones.
+
+From scripts:
+
+```seven
+entity.lightShadows = false          // on the Sun: no shadows (inside a cave, say)
+entity.lightShadowStrength = 0.4     // softer, lighter shadows
+find("Ghost").castShadows = false
+```
+
+In Eights: **Set Light Shadows**, **Set Shadow Strength** and **Set Casts Shadows** (World).
 
 ## Graphics API: OpenGL or Vulkan
 

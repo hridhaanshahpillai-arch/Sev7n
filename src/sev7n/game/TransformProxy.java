@@ -62,7 +62,7 @@ final class TransformProxy implements SevenObject {
             case "position" -> transform.position;
             case "rotation" -> transform.rotation;
             case "scale" -> transform.scale;
-            default -> throw new SevenError("transform." + name + " can't be changed", line);
+            default -> throw cantChange("transform." + name, name, line);
         };
         if (!(value instanceof Vec3 v)) {
             throw new SevenError("transform." + name + " must be a vec3, not " + Values.typeName(value), line);

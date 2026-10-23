@@ -4,6 +4,8 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VkAttachmentDescription;
+import org.lwjgl.vulkan.VkAttachmentReference;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkClearValue;
@@ -15,6 +17,7 @@ import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
+import org.lwjgl.vulkan.VkFramebufferCreateInfo;
 import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkImageBlit;
 import org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState;
@@ -31,8 +34,11 @@ import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderPassBeginInfo;
+import org.lwjgl.vulkan.VkRenderPassCreateInfo;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
+import org.lwjgl.vulkan.VkSubpassDependency;
+import org.lwjgl.vulkan.VkSubpassDescription;
 import org.lwjgl.vulkan.VkVertexInputAttributeDescription;
 import org.lwjgl.vulkan.VkVertexInputBindingDescription;
 import org.lwjgl.vulkan.VkViewport;
@@ -62,6 +68,7 @@ import static org.lwjgl.vulkan.VK10.*;
  *   sprite   see-through pictures: blended                     (+ a wireframe version)
  *   particle see-through dots: blended, don't write depth      (+ a glowing, adding version)
  *   lines    grid and outlines: blended, don't write depth     (+ an on-top version)
+ *   shadow   the shadow map: depth only, in its own render pass before the frame's
  */
 public final class VulkanBackend implements GraphicsBackend {
 
@@ -76,7 +83,16 @@ public final class VulkanBackend implements GraphicsBackend {
     private final long smoothSampler;
     private final long sharpSampler;
     private final boolean mipmaps;
-    private final long[] shaders = new long[5]; // lit vertex, lit fragment, sprite fragment, lines vertex, lines fragment
+    private final long[] shaders = new long[7]; // lit vertex, lit fragment, sprite fragment, lines vertex, lines fragment, shadow vertex, shadow fragment
+
+    // the shadow map: a depth picture of the scene from the light, which lit surfaces read (frame set, binding 1)
+    private final int shadowFormat;
+    private final long shadowRenderPass;
+    private final long shadowSampler;
+    private final long shadowPipeline;
+    private VulkanDevice.Image shadowImage;
+    private long shadowFramebuffer;
+    private int shadowSize;
 
     // one Frame uniform buffer (and its descriptor set) per frame in flight, always mapped
     private final VulkanDevice.Buffer[] frameBuffers = new VulkanDevice.Buffer[VulkanDevice.FRAMES_IN_FLIGHT];
@@ -104,7 +120,17 @@ public final class VulkanBackend implements GraphicsBackend {
     VulkanBackend(VulkanDevice vk) {
         this.vk = vk;
         try (MemoryStack stack = stackPush()) {
-            frameSetLayout = setLayout(stack, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+            // the frame set: the Frame uniform buffer, and the shadow map
+            VkDescriptorSetLayoutBinding.Buffer frameBindings = VkDescriptorSetLayoutBinding.calloc(2, stack);
+            frameBindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
+                    .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+            frameBindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1)
+                    .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+            LongBuffer frameLayout = stack.mallocLong(1);
+            VulkanDevice.check(vkCreateDescriptorSetLayout(vk.device,
+                    VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(frameBindings), null, frameLayout),
+                    "create a descriptor layout");
+            frameSetLayout = frameLayout.get(0);
             textureSetLayout = setLayout(stack, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
             VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack)
                     .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT).offset(0).size(VulkanShaders.PUSH_SIZE);
@@ -119,14 +145,32 @@ public final class VulkanBackend implements GraphicsBackend {
             mipmaps = vk.supports(TEXTURE_FORMAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
                     | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT);
 
-            framePool = descriptorPool(stack, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VulkanDevice.FRAMES_IN_FLIGHT, false);
-            for (int i = 0; i < VulkanDevice.FRAMES_IN_FLIGHT; i++) createFrameBuffer(stack, i);
+            int frames = VulkanDevice.FRAMES_IN_FLIGHT;
+            VkDescriptorPoolSize.Buffer frameSizes = VkDescriptorPoolSize.calloc(2, stack);
+            frameSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(frames);
+            frameSizes.get(1).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(frames);
+            LongBuffer pool = stack.mallocLong(1);
+            VulkanDevice.check(vkCreateDescriptorPool(vk.device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
+                    .maxSets(frames).pPoolSizes(frameSizes), null, pool), "create a descriptor pool");
+            framePool = pool.get(0);
+            for (int i = 0; i < frames; i++) createFrameBuffer(stack, i);
+
+            // a 32-bit depth shadow map where the card can read it back, else 16-bit (every card can)
+            int readable = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+            shadowFormat = vk.supports(VK_FORMAT_D32_SFLOAT, readable) ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_D16_UNORM;
+            shadowSampler = shadowSampler(stack, vk.supports(shadowFormat, readable | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT));
+            shadowRenderPass = shadowRenderPass(stack);
         }
         shaders[0] = shaderModule(VulkanShaders.LIT_VERTEX, false, "lit.vert");
         shaders[1] = shaderModule(VulkanShaders.LIT_FRAGMENT, true, "lit.frag");
         shaders[2] = shaderModule(VulkanShaders.SPRITE_FRAGMENT, true, "sprite.frag");
         shaders[3] = shaderModule(VulkanShaders.LINES_VERTEX, false, "lines.vert");
         shaders[4] = shaderModule(VulkanShaders.LINES_FRAGMENT, true, "lines.frag");
+        shaders[5] = shaderModule(VulkanShaders.SHADOW_VERTEX, false, "shadow.vert");
+        shaders[6] = shaderModule(VulkanShaders.SHADOW_FRAGMENT, true, "shadow.frag");
+        shadowPipeline = pipeline(shaders[5], shaders[6], true, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_POLYGON_MODE_FILL,
+                false, true, true, VK_SAMPLE_COUNT_1_BIT, false, true);
+        resizeShadowMap(1); // always something for lit surfaces to read, even with shadows off
         BufferedImage pixel = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
         pixel.setRGB(0, 0, 0xFFFFFFFF);
         white = (VkTexture) texture(pixel, true);
@@ -156,6 +200,80 @@ public final class VulkanBackend implements GraphicsBackend {
         LongBuffer handle = stack.mallocLong(1);
         VulkanDevice.check(vkCreateSampler(vk.device, info, null, handle), "create a sampler");
         return handle.get(0);
+    }
+
+    /** Reading the shadow map compares depths, smoothly between pixels where the card can; outside it, nothing is in shadow. */
+    private long shadowSampler(MemoryStack stack, boolean smooth) {
+        int filter = smooth ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
+                .magFilter(filter).minFilter(filter).mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER)
+                .compareEnable(true).compareOp(VK_COMPARE_OP_LESS_OR_EQUAL)
+                .minLod(0).maxLod(0).borderColor(VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE);
+        LongBuffer handle = stack.mallocLong(1);
+        VulkanDevice.check(vkCreateSampler(vk.device, info, null, handle), "create a sampler");
+        return handle.get(0);
+    }
+
+    /** Draws only depth, then leaves the map ready for lit surfaces to read. */
+    private long shadowRenderPass(MemoryStack stack) {
+        VkAttachmentDescription.Buffer depth = VkAttachmentDescription.calloc(1, stack);
+        depth.get(0).format(shadowFormat).samples(VK_SAMPLE_COUNT_1_BIT)
+                .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR).storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE).stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED).finalLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        VkAttachmentReference depthRef = VkAttachmentReference.calloc(stack)
+                .attachment(0).layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        VkSubpassDescription.Buffer subpass = VkSubpassDescription.calloc(1, stack)
+                .pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS).colorAttachmentCount(0).pDepthStencilAttachment(depthRef);
+        VkSubpassDependency.Buffer dependencies = VkSubpassDependency.calloc(2, stack);
+        // wait for the last frame to finish reading the map before drawing over it
+        dependencies.get(0).srcSubpass(VK_SUBPASS_EXTERNAL).dstSubpass(0)
+                .srcStageMask(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT).srcAccessMask(VK_ACCESS_SHADER_READ_BIT)
+                .dstStageMask(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
+                .dstAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+        // lit surfaces read it after it's drawn
+        dependencies.get(1).srcSubpass(0).dstSubpass(VK_SUBPASS_EXTERNAL)
+                .srcStageMask(VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT).srcAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                .dstStageMask(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+        VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
+                .pAttachments(depth).pSubpasses(subpass).pDependencies(dependencies);
+        LongBuffer handle = stack.mallocLong(1);
+        VulkanDevice.check(vkCreateRenderPass(vk.device, info, null, handle), "create a render pass");
+        return handle.get(0);
+    }
+
+    /** A new shadow map of this size; every frame's set is pointed at it. Only between frames' use of it. */
+    private void resizeShadowMap(int size) {
+        vkDeviceWaitIdle(vk.device); // frames in flight may still read the old one
+        if (shadowImage != null) {
+            vkDestroyFramebuffer(vk.device, shadowFramebuffer, null);
+            vk.destroy(shadowImage);
+        }
+        shadowSize = size;
+        shadowImage = vk.image(size, size, 1, VK_SAMPLE_COUNT_1_BIT, shadowFormat,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        long image = shadowImage.handle();
+        // readable straight away, for frames that skip the shadow pass
+        vk.runNow(commands -> VulkanDevice.barrier(commands, image, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT));
+        try (MemoryStack stack = stackPush()) {
+            LongBuffer handle = stack.mallocLong(1);
+            VulkanDevice.check(vkCreateFramebuffer(vk.device, VkFramebufferCreateInfo.calloc(stack).sType$Default()
+                    .renderPass(shadowRenderPass).pAttachments(stack.longs(shadowImage.view()))
+                    .width(size).height(size).layers(1), null, handle), "create a framebuffer");
+            shadowFramebuffer = handle.get(0);
+            VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack)
+                    .sampler(shadowSampler).imageView(shadowImage.view()).imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            for (long set : frameSets) {
+                VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack).sType$Default()
+                        .dstSet(set).dstBinding(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                        .descriptorCount(1).pImageInfo(imageInfo);
+                vkUpdateDescriptorSets(vk.device, write, null);
+            }
+        }
     }
 
     private long descriptorPool(MemoryStack stack, int type, int count, boolean freeable) {
@@ -222,12 +340,21 @@ public final class VulkanBackend implements GraphicsBackend {
 
     private long pipeline(long vertexShader, long fragmentShader, boolean fullVertex, int topology, int polygonMode,
                           boolean blend, boolean depthTest, boolean depthWrite, int samples) {
-        return pipeline(vertexShader, fragmentShader, fullVertex, topology, polygonMode, blend, depthTest, depthWrite, samples, false);
+        return pipeline(vertexShader, fragmentShader, fullVertex, topology, polygonMode, blend, depthTest, depthWrite, samples, false, false);
     }
 
-    /** @param additive blending adds the color (glow) instead of covering what's behind */
     private long pipeline(long vertexShader, long fragmentShader, boolean fullVertex, int topology, int polygonMode,
                           boolean blend, boolean depthTest, boolean depthWrite, int samples, boolean additive) {
+        return pipeline(vertexShader, fragmentShader, fullVertex, topology, polygonMode, blend, depthTest, depthWrite, samples, additive, false);
+    }
+
+    /**
+     * @param additive blending adds the color (glow) instead of covering what's behind
+     * @param shadow   for the shadow render pass: no color, and depth pushed back a little
+     *                 (more on slopes) so surfaces don't shadow themselves
+     */
+    private long pipeline(long vertexShader, long fragmentShader, boolean fullVertex, int topology, int polygonMode,
+                          boolean blend, boolean depthTest, boolean depthWrite, int samples, boolean additive, boolean shadow) {
         try (MemoryStack stack = stackPush()) {
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
             stages.get(0).sType$Default().stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertexShader).pName(stack.UTF8("main"));
@@ -251,7 +378,8 @@ public final class VulkanBackend implements GraphicsBackend {
                     .viewportCount(1).scissorCount(1);
             // no culling: planes and sprites are visible from both sides
             VkPipelineRasterizationStateCreateInfo raster = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType$Default()
-                    .polygonMode(polygonMode).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE).lineWidth(1f);
+                    .polygonMode(polygonMode).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE).lineWidth(1f)
+                    .depthBiasEnable(shadow).depthBiasConstantFactor(shadow ? 1.5f : 0).depthBiasSlopeFactor(shadow ? 3f : 0);
             VkPipelineMultisampleStateCreateInfo multisample = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType$Default()
                     .rasterizationSamples(samples);
             VkPipelineDepthStencilStateCreateInfo depth = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType$Default()
@@ -265,7 +393,7 @@ public final class VulkanBackend implements GraphicsBackend {
                     .srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE).dstAlphaBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
                     .alphaBlendOp(VK_BLEND_OP_ADD);
             VkPipelineColorBlendStateCreateInfo colorBlend = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType$Default()
-                    .pAttachments(blending);
+                    .pAttachments(shadow ? null : blending);
             VkPipelineDynamicStateCreateInfo dynamic = VkPipelineDynamicStateCreateInfo.calloc(stack).sType$Default()
                     .pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
 
@@ -273,7 +401,7 @@ public final class VulkanBackend implements GraphicsBackend {
                     .pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(assembly)
                     .pViewportState(viewport).pRasterizationState(raster).pMultisampleState(multisample)
                     .pDepthStencilState(depth).pColorBlendState(colorBlend).pDynamicState(dynamic)
-                    .layout(pipelineLayout).renderPass(target.renderPass).subpass(0);
+                    .layout(pipelineLayout).renderPass(shadow ? shadowRenderPass : target.renderPass).subpass(0);
             LongBuffer handle = stack.mallocLong(1);
             VulkanDevice.check(vkCreateGraphicsPipelines(vk.device, VK_NULL_HANDLE, info, null, handle), "create a pipeline");
             return handle.get(0);
@@ -619,6 +747,44 @@ public final class VulkanBackend implements GraphicsBackend {
                 settings.fog ? (float) settings.fogStart : 0f,
                 settings.fog ? (float) Math.max(settings.fogEnd, settings.fogStart + 0.01) : 0f,
                 (float) settings.brightness, shading);
+        Shadows shadows = frame.shadows();
+        if (shadows != null) shadows.matrix().get(VulkanShaders.SHADOW_MATRIX_OFFSET, out);
+        putVec4(out, VulkanShaders.SHADOW_OFFSET, shadows != null ? shadows.strength() : 0, shadows != null ? shadows.texel() : 0, 0, 0);
+    }
+
+    // ---------------------------------------------------------------- shadows
+
+    @Override
+    public void beginShadows(Matrix4f lightMatrix, int size) {
+        if (commands == null) throw new IllegalStateException("Vulkan can only draw during a frame (VulkanPresenter.beginFrame)");
+        if (size != shadowSize) resizeShadowMap(size);
+        // the frame's buffer gets the light's matrix now; begin() fills in the rest (the GPU reads it all when the frame runs)
+        lightMatrix.get(VulkanShaders.SHADOW_MATRIX_OFFSET, MemoryUtil.memByteBuffer(frameAddresses[slot], VulkanShaders.FRAME_SIZE));
+        try (MemoryStack stack = stackPush()) {
+            VkClearValue.Buffer clear = VkClearValue.calloc(1, stack);
+            clear.get(0).depthStencil().set(1, 0);
+            VkRenderPassBeginInfo info = VkRenderPassBeginInfo.calloc(stack).sType$Default()
+                    .renderPass(shadowRenderPass).framebuffer(shadowFramebuffer).pClearValues(clear);
+            info.renderArea().extent().set(size, size);
+            vkCmdBeginRenderPass(commands, info, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdSetViewport(commands, 0, VkViewport.calloc(1, stack).x(0).y(0).width(size).height(size).minDepth(0).maxDepth(1));
+            VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+            scissor.extent().set(size, size);
+            vkCmdSetScissor(commands, 0, scissor);
+            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, stack.longs(frameSets[slot]), null);
+        }
+        boundPipeline = 0;
+        boundTextureSet = 0;
+    }
+
+    @Override
+    public void drawShadowCaster(GpuMesh mesh, GpuTexture texture, Matrix4f model) {
+        draw(shadowPipeline, (VkMesh) mesh, (VkTexture) texture, model, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0);
+    }
+
+    @Override
+    public void endShadows() {
+        vkCmdEndRenderPass(commands);
     }
 
     private static void putVec4(ByteBuffer out, int offset, float x, float y, float z, float w) {
@@ -697,6 +863,11 @@ public final class VulkanBackend implements GraphicsBackend {
     /** Frees everything. VulkanPresenter calls this after the GPU has finished all work and every later() has run. */
     void destroy() {
         for (long module : shaders) vkDestroyShaderModule(vk.device, module, null);
+        vkDestroyPipeline(vk.device, shadowPipeline, null);
+        vkDestroyFramebuffer(vk.device, shadowFramebuffer, null);
+        vk.destroy(shadowImage);
+        vkDestroyRenderPass(vk.device, shadowRenderPass, null);
+        vkDestroySampler(vk.device, shadowSampler, null);
         for (VulkanDevice.Buffer buffer : frameBuffers) vk.destroy(buffer); // freeing the memory unmaps it
         vkDestroyDescriptorPool(vk.device, framePool, null);
         for (long[] pool : texturePools) vkDestroyDescriptorPool(vk.device, pool[0], null);

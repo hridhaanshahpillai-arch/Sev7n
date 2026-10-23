@@ -10,7 +10,7 @@ import imgui.type.ImInt;
  *
  *   Hierarchy | Scene / Game / Script / Eights | Inspector
  *             |-----------------------|
- *             | Console / Project     |
+ *             | Console / Project / Animation (when open) |
  */
 final class DockLayout {
 
@@ -41,6 +41,7 @@ final class DockLayout {
         imgui.internal.ImGui.dockBuilderDockWindow(EightsPanel.TITLE, top.get());
         imgui.internal.ImGui.dockBuilderDockWindow(ConsolePanel.TITLE, bottom.get());
         imgui.internal.ImGui.dockBuilderDockWindow(ProjectPanel.TITLE, bottom.get());
+        imgui.internal.ImGui.dockBuilderDockWindow(AnimationPanel.TITLE, bottom.get());
         imgui.internal.ImGui.dockBuilderFinish(dockspace);
     }
 }

@@ -99,6 +99,11 @@ public final class Project {
      * Every imported file of this kind, as project-relative paths, sorted.
      * Cached for a moment, because the editor asks for this every frame.
      */
+    /** A file was just added: the next assets() call looks at the folder again. */
+    public void rescanAssets() {
+        assetsListedAt = 0;
+    }
+
     public List<String> assets(AssetKind kind) {
         long now = System.currentTimeMillis();
         if (now - assetsListedAt > ASSET_LIST_LIFETIME_MS) {

@@ -70,11 +70,12 @@ final class EntityProxy implements SevenObject {
     }
 
     /** Everything after "entity." (for "did you mean ...?"). */
-    private static final List<String> PROPERTIES = List.of("name", "active", "tags", "transform", "position", "color", "mesh", "texture", "style",
+    private static final List<String> PROPERTIES = List.of("name", "active", "tags", "transform", "position", "color", "mesh", "texture", "castShadows", "style",
             "velocity", "grounded", "push", "addForce", "addImpulse", "mass", "kinematic", "frame", "flipX", "flipY", "play", "animation",
             "animationDone", "animationSpeed", "animations", "ragdoll", "getUp", "ragdolling", "ragdollResting", "emit", "playEffect", "stopEffect", "effectDone",
             "moveTo", "follow", "chase", "flee", "stay", "resume", "state", "activity", "target", "arrived", "seen", "canSee", "remember",
-            "remembers", "opinion", "setOpinion", "knows", "lastSeen", "forget", "lightIntensity", "lightColor", "lightAmbient", "camera",
+            "remembers", "opinion", "setOpinion", "knows", "lastSeen", "forget", "lightIntensity", "lightColor", "lightAmbient", "lightShadows",
+            "lightShadowStrength", "playAudio", "stopAudio", "audioPlaying", "playClip", "stopClip", "clipPlaying", "clipTime", "camera",
             "tile", "setTile", "hasTag", "addTag", "removeTag", "destroy", "send", "addBehaviour", "behaviour", "parent", "children");
 
     @Override
@@ -93,6 +94,7 @@ final class EntityProxy implements SevenObject {
             case "color" -> renderer() == null ? null : renderer().color;
             case "mesh" -> renderer() == null ? null : renderer().mesh;
             case "texture" -> texture();
+            case "castShadows" -> renderer() != null && renderer().castShadows;
             // physics
             case "velocity" -> requireBody(line).velocity;
             case "grounded" -> requireBody(line).grounded;
@@ -218,6 +220,41 @@ final class EntityProxy implements SevenObject {
             case "lightIntensity" -> require(Light.class, "a Directional Light", line).intensity;
             case "lightColor" -> require(Light.class, "a Directional Light", line).color;
             case "lightAmbient" -> require(Light.class, "a Directional Light", line).ambient;
+            case "lightShadows" -> require(Light.class, "a Directional Light", line).shadows;
+            case "lightShadowStrength" -> require(Light.class, "a Directional Light", line).shadowStrength;
+            // Audio Source: playAudio([clip]) plays it from the start (a different sound file if given), stopAudio()
+            case "playAudio" -> new NativeFunction(name, 0, 1, args -> {
+                sev7n.scene.AudioSource source = require(sev7n.scene.AudioSource.class, "an Audio Source", args.line());
+                if (args.has(0)) source.clip = args.string(0);
+                try {
+                    game.sound().playSource(entity);
+                } catch (IllegalArgumentException e) {
+                    throw args.error(e.getMessage());
+                }
+                return null;
+            });
+            case "stopAudio" -> new NativeFunction(name, 0, 0, args -> {
+                game.sound().stopSource(entity);
+                return null;
+            });
+            case "audioPlaying" -> game.sound().sourcePlaying(entity);
+            // Animation Player: playClip(["door_open"]) plays its keyframe animation from the start (another one if
+            // given: a name in assets/animations, or a path), stopClip() stops it where it is
+            case "playClip" -> new NativeFunction(name, 0, 1, args -> {
+                require(sev7n.scene.AnimationPlayer.class, "an Animation Player", args.line());
+                try {
+                    game.clips().play(game.scene(), entity, args.has(0) ? args.string(0) : null);
+                } catch (IllegalArgumentException e) {
+                    throw args.error(e.getMessage());
+                }
+                return null;
+            });
+            case "stopClip" -> new NativeFunction(name, 0, 0, args -> {
+                game.clips().stop(entity);
+                return null;
+            });
+            case "clipPlaying" -> entity.get(sev7n.scene.AnimationPlayer.class) != null && entity.get(sev7n.scene.AnimationPlayer.class).playing;
+            case "clipTime" -> entity.get(sev7n.scene.AnimationPlayer.class) == null ? 0.0 : entity.get(sev7n.scene.AnimationPlayer.class).time;
             // camera & tilemap
             case "camera" -> entity.get(Camera.class) == null ? null : new CameraProxy(entity.get(Camera.class));
             case "tile" -> new NativeFunction(name, 2, 2, args -> {
@@ -280,6 +317,10 @@ final class EntityProxy implements SevenObject {
             case "lightIntensity" -> require(Light.class, "a Directional Light", line).intensity = Math.max(0, requireType(value, Double.class, name, line));
             case "lightColor" -> require(Light.class, "a Directional Light", line).color = requireType(value, Color.class, name, line);
             case "lightAmbient" -> require(Light.class, "a Directional Light", line).ambient = Math.max(0, requireType(value, Double.class, name, line));
+            case "lightShadows" -> require(Light.class, "a Directional Light", line).shadows = Values.isTruthy(value);
+            case "lightShadowStrength" -> require(Light.class, "a Directional Light", line).shadowStrength =
+                    Math.max(0, Math.min(1, requireType(value, Double.class, name, line)));
+            case "castShadows" -> requireRenderer(line).castShadows = Values.isTruthy(value);
             case "animationSpeed" -> requireModelAnimator(line).speed = requireType(value, Double.class, name, line);
             case "flipX" -> requireSprite(line).flipX = Values.isTruthy(value);
             case "flipY" -> requireSprite(line).flipY = Values.isTruthy(value);
@@ -290,7 +331,7 @@ final class EntityProxy implements SevenObject {
                     throw new SevenError(entity.name + " can't be a child of " + parent.name + ": " + parent.name + " is already inside " + entity.name, line);
                 }
             }
-            default -> throw new SevenError("entity." + name + " can't be changed", line);
+            default -> throw cantChange("entity." + name, name, line);
         }
     }
 
